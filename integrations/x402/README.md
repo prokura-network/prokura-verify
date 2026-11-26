@@ -13,7 +13,7 @@ import { connectProkura, createProkuraGuard } from "@prokura/x402-guard";
 const guard = createProkuraGuard({ mcp: await connectProkura(), purpose: "api_usage" });
 const client = guard.protect(new x402Client().register("eip155:8453", new ExactEvmScheme(signer)));
 const fetchPaid = guard.wrapFetch(wrapFetchWithPayment(fetch, client));
-const res = await fetchPaid("https://api.example.com/paid");   // throws unless Prokura says allow
+const res = await fetchPaid("https://data.agents.prokura.network/v1/agents/data/forecast"); // throws unless Prokura says allow
 console.log(guard.receiptOf(res)?.evidenceId);                  // the signed Nachweis record
 ```
 
@@ -50,7 +50,7 @@ The wallet address in `payTo` is not part of the mandate; the payee is the domai
 ```ts
 import { connectProkura, prokuraPay } from "@prokura/x402-guard";
 
-const r = await prokuraPay("https://api.example.com/paid", { mcp: await connectProkura(), onStepUp: "return" });
+const r = await prokuraPay("https://data.agents.prokura.network/v1/agents/data/forecast", { mcp: await connectProkura(), onStepUp: "return" });
 if (r.approvalUrl) console.log("approve:", r.approvalUrl);        // step_up: a human approves within 15 minutes
 else console.log(r.execution?.response?.body, r.receipt.evidenceId);
 ```
@@ -59,7 +59,19 @@ else console.log(r.execution?.response?.body, r.receipt.evidenceId);
 
 ## The mandate
 
-The mandate needs `x402` in its `rails`, the resource's domain in its `payees`, the purpose in its `purposes`, and USDC limits in `currencyLimits` (a EUR mandate without them judges USDC amounts at a fixed demo rate). The public demo grant on `prokura.network/mcp` covers the `mollie` rail only, so with the demo grant every x402 check is denied with `RAIL_NOT_ALLOWED`. That is a correct answer, and it comes with a Nachweis record; to get `allow`, x402 needs a mandate of your own.
+The mandate needs `x402` in its `rails`, the resource's domain in its `payees`, the purpose in its `purposes`, and USDC limits in `currencyLimits` (a EUR mandate without them judges USDC amounts at a fixed demo rate).
+
+The public demo grant on `prokura.network/mcp` now also allows the x402 rail, with a tight scope:
+
+- purpose `api_usage`
+- payees: the demo seller agents (`data.`, `scraper.` and `compute.agents.prokura.network`), plus the demo stores
+- USDC caps of its own: 0.50 on its own, 1.00 with approval, 2.00 per day
+
+A check for `https://data.agents.prokura.network/…` at 0.05 USDC therefore returns `allow` once that grant is in place. A resource on any other host is still denied with `PAYEE_NOT_ALLOWED`.
+
+### A fresh grant
+
+One MCP session holds one demo grant, and a grant keeps the terms it was issued with. After the demo scope gained x402, an already-approved session still has the old Mollie-only mandate, so a check is denied with `RAIL_NOT_ALLOWED`. Open a **new** session (`connectProkura()`), call `prokura_request_mandate` again, and approve the new link (one tap, or a passkey). Then keep that connection: a new session needs a new grant. The example does this for you when you run it with `--wait`.
 
 ## Run it
 
@@ -68,7 +80,7 @@ cd integrations/x402/guard
 npm ci
 npm test                         # unit tests: mocked Prokura MCP, mocked 402 server, the real @x402/fetch client
 npm run example -- --offline     # everything mocked, ends in a paid response
-npm run example -- --wait        # live prokura.network/mcp: prints a grant link, waits for your approval, then checks
+npm run example -- --wait        # live prokura.network/mcp: prints a grant link, waits for a fresh approval, then checks
 ```
 
 The example's wallet is a stand-in that signs nothing; in an agent you register a real scheme such as `ExactEvmScheme` from `@x402/evm`. Set `PROKURA_MCP_URL` or pass `connectProkura({ url })` to use another endpoint.
