@@ -1,46 +1,83 @@
 # x402: a mandate in front of a 402 payment
 
-x402 is a payment challenge on an HTTP request. Prokura adds the business mandate the gate checks before that challenge is paid. There are two ways to use it.
+x402 is a payment challenge on an HTTP request. Prokura adds the business mandate the gate checks before that challenge is paid. [`guard/`](guard/) is a small TypeScript package, `@prokura/x402-guard`, that does this for the x402 client: every 402 challenge is mapped to a Prokura intent and checked before your wallet signs anything.
 
-## A. Let Prokura pay
+There are two ways to use it.
 
-`prokura_pay` takes `x402Url`. Our server fetches the resource, reads the 402 challenge (scheme `exact`, USDC), and builds the intent from it:
+## A. Your wallet pays, Prokura decides first
+
+```ts
+import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
+import { connectProkura, createProkuraGuard } from "@prokura/x402-guard";
+
+const guard = createProkuraGuard({ mcp: await connectProkura(), purpose: "api_usage" });
+const client = guard.protect(new x402Client().register("eip155:8453", new ExactEvmScheme(signer)));
+const fetchPaid = guard.wrapFetch(wrapFetchWithPayment(fetch, client));
+const res = await fetchPaid("https://api.example.com/paid");   // throws unless Prokura says allow
+console.log(guard.receiptOf(res)?.evidenceId);                  // the signed Nachweis record
+```
+
+`guard.protect()` registers an `onBeforePaymentCreation` hook on the x402 client. It runs after x402 picked a payment requirement and before the wallet creates the payload. The hook calls `prokura_check` and:
+
+| Gate says | What happens | What you get |
+|---|---|---|
+| `allow` | x402 pays as usual | the response; `guard.receiptOf(res)` has decision, reasons and `evidenceId` |
+| `step_up` | no payment | `ProkuraStepUpError` with `evidenceId`, and `approvalUrl` when the server sends one |
+| `deny` | no payment | `ProkuraDeniedError` with `code` (first reason), `reasons` and `evidenceId` |
+| session has no mandate | no payment, gate not called | `ProkuraGrantError` with `code` (`grant_required`, `grant_pending`, ...) and `grantUrl` |
+| challenge cannot be expressed | no payment, gate not called | `ProkuraMappingError` (sub-cent price, unknown asset, IP or `localhost` host) |
+
+x402 wraps errors thrown in its hooks in a plain `Error`; `guard.wrapFetch()` rethrows the typed error instead. The hook alone also blocks the payment, with the reason in the message. If you do not use `@x402/fetch`, call `guard.check(paymentRequired, requirement)` yourself; it returns the allow receipt or throws as above (`guard.decide()` returns the receipt without throwing).
+
+### Intent mapping
 
 | Intent field | Value |
 |---|---|
-| `amount` | the challenge's `maxAmountRequired`, converted from USDC's 6 decimals to two (sub-cent prices are refused) |
-| `currency` | `USDC` |
-| `payee` | `{"type": "domain", "value": <host of x402Url>}` |
-| `purpose` | the `purpose` you pass, default `api_usage` |
+| `amount` | the requirement's `amount` (v2) or `maxAmountRequired` (v1), from atomic units to two decimals; sub-cent prices are refused, not rounded |
+| `currency` | from the asset: USDC on Base, Base Sepolia, Ethereum, Ethereum Sepolia, Polygon and Solana; add others with `assets` |
+| `payee` | `{"type": "domain", "value": <host of the resource>}`, or a parent domain you give as `payeeDomain` |
+| `purpose` | `purpose`, default `api_usage` |
 | `rail` | `x402` |
-| `reference.resource` | `x402Url` |
+| `reference.resource` | the resource URL (v2 `resource.url`, v1 `resource`, else the request URL) |
+| `reference.description`, `reference.item`, `agent_name`, `mandateId` | from the challenge and your options, when present |
 
-The gate decides as for any payment. Only an `allow` is executed, server-side, and the paid response is returned in the tool result. If you also pass `amount`, it must equal the challenge's price.
+The wallet address in `payTo` is not part of the mandate; the payee is the domain that serves the resource.
 
-```json
-{ "name": "prokura_pay", "arguments": { "x402Url": "https://api.example.com/paid/resource", "purpose": "api_usage" } }
-```
+## B. Let Prokura pay
 
-The mandate needs `x402` in its `rails`, the resource's domain in its `payees`, the purpose in its `purposes`, and USDC limits in `currencyLimits` (a EUR mandate without them judges USDC amounts at a fixed demo rate). The public demo grant covers the `mollie` rail only, so x402 needs a mandate of your own.
-
-## B. Check, then let your own client pay
-
-The x402 TypeScript client has `onBeforePaymentCreation` (`on_before_payment_creation` in Python). Ask `prokura_check` there and abort on anything but `allow`. In this pattern your wallet signs and pays; we record the decision but do not execute the payment. We have not run this snippet against the x402 SDK; check the field names of the version you use.
+`prokura_pay` takes `x402Url`. Our server fetches the resource, reads the 402 challenge (scheme `exact`, USDC), builds the same intent, decides, and executes only an `allow`, server-side; the paid response is returned in the tool result. Your agent holds no wallet.
 
 ```ts
-import { prokuraCheck } from "../prokura-check";
+import { connectProkura, prokuraPay } from "@prokura/x402-guard";
 
-x402Client.onBeforePaymentCreation(async ({ paymentRequired, selectedRequirements }) => {
-  const d = await prokuraCheck(mcp, {
-    amount: toDecimal(selectedRequirements.maxAmountRequired, 6), // atomic units -> "0.01"
-    currency: "USDC",
-    payee: { type: "domain", value: new URL(paymentRequired.resource).hostname },
-    purpose: "api_usage",
-    rail: "x402",
-    reference: { resource: paymentRequired.resource },
-  });
-  if ("error" in d || d.decision !== "allow") return { abort: true, reason: "error" in d ? d.error : d.reasons.join(",") };
-});
+const r = await prokuraPay("https://api.example.com/paid", { mcp: await connectProkura(), onStepUp: "return" });
+if (r.approvalUrl) console.log("approve:", r.approvalUrl);        // step_up: a human approves within 15 minutes
+else console.log(r.execution?.response?.body, r.receipt.evidenceId);
 ```
 
-`toDecimal` must return exactly two fraction digits and reject sub-cent prices, as the server does.
+`deny` throws `ProkuraDeniedError`. If you also pass `amount`, it must equal the challenge's price. This mode is the one that returns an approval link on `step_up`.
+
+## The mandate
+
+The mandate needs `x402` in its `rails`, the resource's domain in its `payees`, the purpose in its `purposes`, and USDC limits in `currencyLimits` (a EUR mandate without them judges USDC amounts at a fixed demo rate). The public demo grant on `prokura.network/mcp` covers the `mollie` rail only, so with the demo grant every x402 check is denied with `RAIL_NOT_ALLOWED`. That is a correct answer, and it comes with a Nachweis record; to get `allow`, x402 needs a mandate of your own.
+
+## Run it
+
+```sh
+cd integrations/x402/guard
+npm ci
+npm test                         # unit tests: mocked Prokura MCP, mocked 402 server, the real @x402/fetch client
+npm run example -- --offline     # everything mocked, ends in a paid response
+npm run example -- --wait        # live prokura.network/mcp: prints a grant link, waits for your approval, then checks
+```
+
+The example's wallet is a stand-in that signs nothing; in an agent you register a real scheme such as `ExactEvmScheme` from `@x402/evm`. Set `PROKURA_MCP_URL` or pass `connectProkura({ url })` to use another endpoint.
+
+## Limits
+
+- `prokura_check` returns no approval link on `step_up`; the error carries the `evidenceId`. Use mode B when a human should approve from a link.
+- One MCP session holds one demo grant. Keep the connection for the agent's lifetime; a new session needs a new grant.
+- Prices must be whole cents. A 0.001 USDC call cannot be expressed as a Prokura intent and is refused.
+- Hosts must be domain names. `localhost` and IP addresses are refused, as Prokura payees are domains.
+- `guard.wrapFetch()` uses `AsyncLocalStorage`, so it needs Node.js 20 or later (no browsers yet).
+- Tested against `@x402/fetch` and `@x402/core` 2.32.0 with v2 (header) and v1 (body) challenges. The package is not published to npm yet; use it from this folder.

@@ -4,7 +4,7 @@ Where a Prokura check sits in three agent-payment stacks. All three ask the same
 
 | Folder | Stack | Where Prokura sits | Status |
 |---|---|---|---|
-| [`x402/`](x402/README.md) | x402 clients | check in the client's `onBeforePaymentCreation` hook, or let us pay with `prokura_pay` and `x402Url` | `prokura_pay` with `x402Url` is part of our MCP server; the hook example is a pattern we have not run against the x402 SDK |
+| [`x402/`](x402/README.md) | x402 clients | check in the client's `onBeforePaymentCreation` hook, or let us pay with `prokura_pay` and `x402Url` | working package [`x402/guard`](x402/guard/) (`@prokura/x402-guard`), tested against `@x402/fetch` 2.32; `prokura_pay` with `x402Url` is part of our MCP server |
 | [`agentkit/`](agentkit/README.md) | coinbase/agentkit x402 action provider | the proposed `beforePayment` hook ([agentkit#1576](https://github.com/coinbase/agentkit/issues/1576)) asks `prokura_check` before a payment is signed | targets the API proposed upstream; not yet in an agentkit release |
 | [`ap2/`](ap2/README.md) | Google Agent Payments Protocol (AP2) | a check before an AP2 payment executes, and the Nachweis as dispute evidence | pseudo-code; AP2's object model is still changing |
 
