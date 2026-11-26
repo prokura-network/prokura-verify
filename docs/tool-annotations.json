@@ -1,0 +1,9 @@
+{
+  "prokura_request_mandate": { "title": "Request a demo mandate", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false },
+  "prokura_check":           { "title": "Check a payment",        "readOnlyHint": true,                                                   "openWorldHint": false },
+  "prokura_pay":             { "title": "Pay",                    "readOnlyHint": false, "destructiveHint": true,  "idempotentHint": false, "openWorldHint": true  },
+  "prokura_evidence":        { "title": "Get evidence",           "readOnlyHint": true,                                                   "openWorldHint": false },
+  "prokura_mandate":         { "title": "Get mandate",            "readOnlyHint": true,                                                   "openWorldHint": false },
+  "store_catalog":           { "title": "Fake store catalog",     "readOnlyHint": true,                                                   "openWorldHint": false },
+  "store_quote":             { "title": "Fake store quote",       "readOnlyHint": true,                                                   "openWorldHint": false }
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "network.prokura/authority",
+  "title": "Prokura Authority",
+  "description": "Power of attorney for AI agents: a no-LLM gate checks each payment against a human-signed mandate.",
+  "version": "0.1.0",
+  "websiteUrl": "https://prokura.network",
+  "icons": [
+    {
+      "src": "https://prokura.network/icon.svg",
+      "mimeType": "image/svg+xml",
+      "sizes": [
+        "any"
+      ]
+    },
+    {
+      "src": "https://prokura.network/apple-icon.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "180x180"
+      ]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://prokura.network/mcp"
+    }
+  ],
+  "repository": {
+    "url": "https://github.com/prokura-network/prokura-verify",
+    "source": "github"
+  }
+}

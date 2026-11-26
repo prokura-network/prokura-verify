@@ -1,0 +1,135 @@
+{
+  "format": "nachweis/v1",
+  "note": "SYNTHETIC test data signed with a throwaway key. Not issued by Prokura.",
+  "server": "did:key:z6MkjvZinzJ2W1xuCpUvXfyBF7vRU2xhpuAgVezu5L9LLnUz",
+  "records": [
+    {
+      "mandateId": "M1",
+      "agentId": "did:key:example-agent",
+      "principalId": "did:web:example.org",
+      "rail": "mollie",
+      "amount": "9.00",
+      "currency": "EUR",
+      "payee": {
+        "type": "domain",
+        "value": "example.org"
+      },
+      "id": "R1",
+      "kind": "pay",
+      "decision": "allow",
+      "reasons": [
+        "OK"
+      ],
+      "railRef": "tr_1",
+      "railStatus": "paid",
+      "refId": null,
+      "stepUp": null,
+      "gateState": {
+        "now": "2026-01-01T00:00:00.000Z"
+      },
+      "intent": {
+        "amount": "9.00",
+        "currency": "EUR",
+        "payee": {
+          "type": "domain",
+          "value": "example.org"
+        },
+        "purpose": "software",
+        "rail": "mollie"
+      },
+      "intentHash": "sha256:0177c57a3f8a3dd35b0003c357f78fbb42c60ecd10253330c7105f601ac18bdf",
+      "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "createdAt": "2026-01-01T00:00:00.500Z",
+      "hash": "55fd9a576635f5dff9fdb9ceaf1be12f0d782cce836bc10c7b2d6069cf4f97bc",
+      "signature": "cjlBfdyiuhXh4v-x3t4UhWvct-GRfEs1h8QTmPDxhEfcrEC1s5mQ13P_5z92WHYizWN2FPcbr2XKwCh6IznNAg"
+    },
+    {
+      "mandateId": "M1",
+      "agentId": "did:key:example-agent",
+      "principalId": "did:web:example.org",
+      "rail": "mollie",
+      "amount": "9.00",
+      "currency": "EUR",
+      "payee": {
+        "type": "domain",
+        "value": "example.org"
+      },
+      "id": "R2",
+      "kind": "pay",
+      "decision": "deny",
+      "reasons": [
+        "CAP_PERIOD_EXCEEDED"
+      ],
+      "railRef": null,
+      "railStatus": null,
+      "v": 2,
+      "mandateSeq": 1,
+      "agentName": "synthetic",
+      "refId": null,
+      "stepUp": null,
+      "gateState": {
+        "now": "2026-01-01T00:00:01.000Z"
+      },
+      "intent": {
+        "amount": "9.00",
+        "currency": "EUR",
+        "payee": {
+          "type": "domain",
+          "value": "example.org"
+        },
+        "purpose": "software",
+        "rail": "mollie"
+      },
+      "intentHash": "sha256:0177c57a3f8a3dd35b0003c357f78fbb42c60ecd10253330c7105f601ac18bdf",
+      "prevHash": "55fd9a576635f5dff9fdb9ceaf1be12f0d782cce836bc10c7b2d6069cf4f97bc",
+      "createdAt": "2026-01-01T00:00:01.500Z",
+      "mandatePrevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "hash": "df319756e97c8be87e52bc095abe4ea4a837f27a99be75c5a24d4489d7c812ee",
+      "signature": "HZSnw9h2bqc2lAZQcoN4WBpsf7vO8IXkAUgJ7yE3EOc-T7vT0lP4QVu06lwtLmBDQJIkCp0E-gNDKbz1X688Cg"
+    },
+    {
+      "mandateId": "M1",
+      "agentId": "did:key:example-agent",
+      "principalId": "did:web:example.org",
+      "rail": "mollie",
+      "amount": "9.00",
+      "currency": "EUR",
+      "payee": {
+        "type": "domain",
+        "value": "example.org"
+      },
+      "id": "R3",
+      "kind": "pay",
+      "decision": "step_up",
+      "reasons": [
+        "FOUR_EYES_REQUIRED"
+      ],
+      "railRef": null,
+      "railStatus": null,
+      "v": 2,
+      "mandateSeq": 2,
+      "agentName": null,
+      "refId": null,
+      "stepUp": null,
+      "gateState": {
+        "now": "2026-01-01T00:00:02.000Z"
+      },
+      "intent": {
+        "amount": "9.00",
+        "currency": "EUR",
+        "payee": {
+          "type": "domain",
+          "value": "example.org"
+        },
+        "purpose": "software",
+        "rail": "mollie"
+      },
+      "intentHash": "sha256:0177c57a3f8a3dd35b0003c357f78fbb42c60ecd10253330c7105f601ac18bdf",
+      "prevHash": "df319756e97c8be87e52bc095abe4ea4a837f27a99be75c5a24d4489d7c812ee",
+      "createdAt": "2026-01-01T00:00:02.500Z",
+      "mandatePrevHash": "df319756e97c8be87e52bc095abe4ea4a837f27a99be75c5a24d4489d7c812ee",
+      "hash": "ea47506727e0c94ac8703c97fd8cd092bfdbb1e36df1990e4316b85f2b035f59",
+      "signature": "vI1OTF7t3JbVZQbgOlb2FII4xZOcuE2l5rHsEJTUwTzryV2MY3Zw4L2cY1F0qSnSG-vYTi8rLISWjuhwl4RrBQ"
+    }
+  ]
+}

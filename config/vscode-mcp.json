@@ -1,0 +1,5 @@
+{
+  "servers": {
+    "prokura": { "type": "http", "url": "https://prokura.network/mcp" }
+  }
+}
