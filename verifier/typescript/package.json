@@ -1,7 +1,7 @@
 {
   "name": "@prokura/verify",
   "version": "0.1.0",
-  "description": "Offline verifier for Prokura Nachweis (evidence) files and signed daily roots.",
+  "description": "Offline verifier for Prokura Nachweis exports, signed roots and checkpoints, and Merkle inclusion proofs.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "dist/index.js",

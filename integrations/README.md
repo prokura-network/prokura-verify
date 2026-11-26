@@ -1,15 +1,19 @@
-# Integration sketches
+# Integrations
 
-> **These are sketches.** They show where a Prokura check fits in each stack. They have not been run against those SDKs, the APIs they rely on may not exist yet, and none of them is an official integration by the projects named. Status labels for each rail come from [prokura.network/works-with](https://prokura.network/works-with).
+Where a Prokura check sits in three agent-payment stacks. All three ask the same MCP tool, `prokura_check`, before money moves; [`prokura-check.ts`](prokura-check.ts) is the shared helper.
 
-| Folder | Stack | Where Prokura sits | works-with status |
+| Folder | Stack | Where Prokura sits | Status |
 |---|---|---|---|
-| `agentkit/` | coinbase/agentkit x402 action provider | the proposed `beforePayment` hook ([agentkit#1576](https://github.com/coinbase/agentkit/issues/1576)) asks `prokura_check` before a payment is signed | x402: test |
-| `ap2/` | Google Agent Payments Protocol (AP2) | a pre-execution check on a payment mandate, plus the Nachweis as dispute evidence | AP2: test |
-| `x402/` | x402 clients | `onBeforePaymentCreation` hook, or let Prokura pay through `prokura_pay` with `x402Url` | x402: test |
+| [`x402/`](x402/README.md) | x402 clients | check in the client's `onBeforePaymentCreation` hook, or let us pay with `prokura_pay` and `x402Url` | `prokura_pay` with `x402Url` is part of our MCP server; the hook example is a pattern we have not run against the x402 SDK |
+| [`agentkit/`](agentkit/README.md) | coinbase/agentkit x402 action provider | the proposed `beforePayment` hook ([agentkit#1576](https://github.com/coinbase/agentkit/issues/1576)) asks `prokura_check` before a payment is signed | targets the API proposed upstream; not yet in an agentkit release |
+| [`ap2/`](ap2/README.md) | Google Agent Payments Protocol (AP2) | a check before an AP2 payment executes, and the Nachweis as dispute evidence | pseudo-code; AP2's object model is still changing |
 
-All three call the same tool over MCP. `prokura-check.ts` is the shared helper.
+None of these is an integration endorsed by the projects named.
 
-## Payee mapping (open question in all three)
+## Payees for x402 and on-chain rails
 
-Prokura payees are either `{"type":"iban"}` or `{"type":"domain"}` (see the `prokura_check` input schema). x402 and on-chain rails pay an **address** (`payTo`). The sketches use the resource URL's host as a `domain` payee. Whether Prokura plans an address payee type is for Prokura to answer; the site doesn't say.
+Our payees are `{"type": "iban"}` or `{"type": "domain"}` ([format §2.3](../docs/nachweis-format.md#23-payee)). For x402, the payee is the **domain of the paid resource**: a mandate allows `{"type": "domain", "value": "api.example.com"}`, the intent carries that domain as payee and the resource URL in `reference.resource`, and we pay only when the resource's host is that domain or a subdomain of it. The wallet address in the challenge's `payTo` is not part of the mandate in v1.
+
+## Amounts
+
+Amounts are decimal strings with exactly two fraction digits (`"0.01"`). An x402 price is converted from the asset's atomic units (6 decimals for USDC); a price with sub-cent precision is refused rather than rounded.

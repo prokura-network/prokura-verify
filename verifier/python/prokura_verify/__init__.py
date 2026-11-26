@@ -1,11 +1,8 @@
-"""Offline verifier for Prokura Nachweis (evidence) files and signed daily roots.
+"""Offline verifier for Prokura Nachweis exports, signed daily roots, hourly
+checkpoints and Merkle inclusion proofs.
 
-What is checked, and where each rule comes from, is documented in
-docs/nachweis-format.md. In short:
-
-  SPEC     = stated in https://prokura.network/llms.txt ("Verify a Nachweis")
-  OBSERVED = not written in llms.txt; matches the verifier shipped on the
-             prokura.network homepage and real demo files, but may change.
+Every rule is specified in docs/nachweis-format.md; section numbers in the
+comments below (§n) refer to that document.
 
 The only third-party dependency is `cryptography` (for Ed25519).
 """
@@ -15,8 +12,9 @@ import base64
 import hashlib
 import json
 import math
+import re
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Union
 
 __all__ = [
     "GENESIS",
@@ -25,16 +23,21 @@ __all__ = [
     "intent_hash",
     "merkle_leaf",
     "merkle_node",
+    "record_leaf",
+    "merkle_root",
+    "inclusion_proof",
+    "verify_inclusion",
+    "server_key_at",
     "did_key_to_ed25519",
     "verify_nachweis",
     "verify_root",
+    "verify_proof",
+    "verify_any",
 ]
 
 GENESIS = "0" * 64
 
-# Fields of a stored record that go into the last element of the hashed array
-# ("the remaining stored fields"). llms.txt does not enumerate them; this list is
-# the one used by the in-browser verifier on prokura.network (OBSERVED).
+# §3.2: the remaining stored fields, in the object that closes the hashed array.
 RECORD_FIELDS = [
     "id", "kind", "refId", "mandateId", "agentId", "principalId", "intentHash",
     "stepUp", "gateState", "rail", "railStatus", "amount", "currency", "payee",
@@ -131,7 +134,7 @@ def _sha256_hex(data: bytes) -> str:
 # ---------------------------------------------------------------------------
 
 def record_hash(record: Dict[str, Any]) -> str:
-    """SPEC: SHA-256 over the RFC 8785 canonical JSON array
+    """§3.2: SHA-256 over the RFC 8785 canonical JSON array
     [prevHash, intent, decision, reasons, railRef, createdAt, remaining-fields].
     Version 2 records add v, mandateSeq, mandatePrevHash and agentName to the
     remaining fields. A field missing from a v1 record is left out (as JavaScript
@@ -156,18 +159,75 @@ def record_hash(record: Dict[str, Any]) -> str:
 
 
 def intent_hash(intent: Dict[str, Any]) -> str:
-    """OBSERVED: "sha256:" + hex SHA-256 of the canonical intent (signature included)."""
+    """§3.4: "sha256:" + hex SHA-256 of the canonical intent, agentSignature included."""
     return "sha256:" + _sha256_hex(canonicalize(intent).encode("utf-8"))
 
 
 def merkle_leaf(leaf: bytes) -> bytes:
-    """SPEC: leaf hash = SHA-256(0x00 || leaf bytes). Which bytes form a leaf is not specified."""
+    """§5: RFC 9162 leaf hash, SHA-256(0x00 || data)."""
     return hashlib.sha256(b"\x00" + leaf).digest()
 
 
 def merkle_node(left: bytes, right: bytes) -> bytes:
-    """SPEC: inner node = SHA-256(0x01 || left || right)."""
+    """§5: RFC 9162 node hash, SHA-256(0x01 || left || right)."""
     return hashlib.sha256(b"\x01" + left + right).digest()
+
+
+def record_leaf(record_hash_hex: str) -> bytes:
+    """§5: the leaf of an evidence record is its 32-byte hash (raw bytes of the hex `hash`)."""
+    return merkle_leaf(bytes.fromhex(record_hash_hex))
+
+
+def _split(n: int) -> int:
+    k = 1
+    while k * 2 < n:
+        k *= 2
+    return k
+
+
+def merkle_root(leaves: Sequence[bytes]) -> bytes:
+    """§5: Merkle Tree Hash over leaf hashes (RFC 9162 §2.1.1). Empty tree = SHA-256("")."""
+    if not leaves:
+        return hashlib.sha256(b"").digest()
+    if len(leaves) == 1:
+        return leaves[0]
+    k = _split(len(leaves))
+    return merkle_node(merkle_root(leaves[:k]), merkle_root(leaves[k:]))
+
+
+def inclusion_proof(m: int, leaves: Sequence[bytes]) -> List[bytes]:
+    """§5: audit path for leaf m (RFC 9162 §2.1.3.1)."""
+    if m < 0 or m >= len(leaves):
+        raise IndexError("leaf index out of range")
+    if len(leaves) == 1:
+        return []
+    k = _split(len(leaves))
+    if m < k:
+        return inclusion_proof(m, leaves[:k]) + [merkle_root(leaves[k:])]
+    return inclusion_proof(m - k, leaves[k:]) + [merkle_root(leaves[:k])]
+
+
+def verify_inclusion(leaf: bytes, index: Any, tree_size: Any, path: Sequence[bytes], root: bytes) -> bool:
+    """§5: verify an audit path (RFC 9162 §2.1.3.2)."""
+    if isinstance(index, bool) or isinstance(tree_size, bool) or not isinstance(index, int) or not isinstance(tree_size, int):
+        return False
+    if index < 0 or index >= tree_size:
+        return False
+    fn, sn, r = index, tree_size - 1, leaf
+    for p in path:
+        if sn == 0:
+            return False
+        if fn % 2 == 1 or fn == sn:
+            r = merkle_node(p, r)
+            if fn % 2 == 0:
+                while fn % 2 == 0 and fn != 0:
+                    fn >>= 1
+                    sn >>= 1
+        else:
+            r = merkle_node(r, p)
+        fn >>= 1
+        sn >>= 1
+    return sn == 0 and r == root
 
 
 # ---------------------------------------------------------------------------
@@ -221,23 +281,62 @@ def _ed25519_ok(pub: bytes, sig_b64url: Optional[str], msg: bytes) -> bool:
 # Verification
 # ---------------------------------------------------------------------------
 
-def _resolve_key(doc_key: Optional[str], pinned: Optional[str], warnings: List[str]) -> Optional[bytes]:
-    if pinned:
-        if doc_key and doc_key.split("#")[0] != pinned.split("#")[0]:
-            warnings.append(f"file names server {doc_key}, but the pinned key is {pinned}; using the pinned key")
-        return did_key_to_ed25519(pinned)
-    if doc_key:
-        warnings.append(
-            "server key taken from the file itself (self-asserted). Pin it with --server-key, "
-            "e.g. the 'server' value of a signed daily root from GET https://api.prokura.network/v1/roots/{date}"
-        )
-        return did_key_to_ed25519(doc_key)
-    return None
+PinnedKeys = Union[None, str, Iterable[str]]
+
+_SELF_ASSERTED = (
+    "server key taken from the file itself (self-asserted). Pin it with --server-key: the 'evidence' key "
+    "from GET https://api.prokura.network/v1/public/keys, or the 'server' of a signed daily root"
+)
 
 
-def verify_nachweis(doc: Dict[str, Any], server_key: Optional[str] = None) -> Dict[str, Any]:
+def _bare(did: str) -> str:
+    return did.split("#", 1)[0]
+
+
+def _pinned_set(pinned: PinnedKeys) -> Optional[Set[str]]:
+    if pinned is None:
+        return None
+    keys = [pinned] if isinstance(pinned, str) else list(pinned)
+    keys = [_bare(k.strip()) for k in keys if k and k.strip()]
+    return set(keys) or None
+
+
+def _parse_time(s: Any) -> Optional[float]:
+    from datetime import datetime
+
+    if not isinstance(s, str):
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def server_key_at(keys: Any, created_at: Any, fallback: str) -> str:
+    """§4: the key that signed a record: the serverKeys window containing its createdAt, else `server`."""
+    t = _parse_time(created_at)
+    if not isinstance(keys, list) or t is None:
+        return fallback
+    for w in keys:
+        if not isinstance(w, dict) or not isinstance(w.get("id"), str):
+            continue
+        start, end = _parse_time(w.get("validFrom")), _parse_time(w.get("validUntil"))
+        if start is not None and start <= t and (w.get("validUntil") is None or (end is not None and t < end)):
+            return w["id"]
+    return fallback
+
+
+def _key_bytes(did: str) -> Optional[bytes]:
+    try:
+        return did_key_to_ed25519(did)
+    except ValueError:
+        return None
+
+
+def verify_nachweis(doc: Any, server_key: PinnedKeys = None) -> Dict[str, Any]:
     """Verify a Nachweis export ({"format": "nachweis/v1", "records": [...], ...})
-    or a bare list of records. Returns a report; report["ok"] is the verdict."""
+    or a bare list of records. `server_key` is one did:key or a list (the published
+    key ring). Returns a report; report["ok"] is the verdict."""
     warnings: List[str] = []
     if isinstance(doc, list):
         records, doc = doc, {}
@@ -248,37 +347,54 @@ def verify_nachweis(doc: Dict[str, Any], server_key: Optional[str] = None) -> Di
     if doc and doc.get("format") not in (None, "nachweis/v1"):
         warnings.append(f"unknown format {doc.get('format')!r}")
 
-    pub = _resolve_key(doc.get("server"), server_key, warnings)
-    if pub is None:
+    pinned = _pinned_set(server_key)
+    if isinstance(doc.get("server"), str):
+        server: Optional[str] = _bare(doc["server"])
+    else:  # a bare list of records: a single pinned key stands in for `server`
+        server = next(iter(pinned)) if pinned and len(pinned) == 1 else None
+    if server is None:
         warnings.append("no server key: record signatures not checked")
+    elif pinned is None:
+        warnings.append(_SELF_ASSERTED)
 
     subject_id = None
     cred = doc.get("credential")
     if isinstance(cred, dict):
         subject_id = (cred.get("credentialSubject") or {}).get("id")
 
-    results = []
+    report: Dict[str, Any] = {}
     failures = 0
+    if pinned and server and server not in pinned:
+        report["serverKey"] = f"FAIL ({server} is not a pinned key)"
+        failures += 1
+    if "serverKeys" in doc:
+        sk = doc.get("serverKeys")
+        listed = isinstance(sk, list) and any(isinstance(k, dict) and k.get("id") == doc.get("server") for k in sk)
+        report["serverKeys"] = "OK" if listed else "FAIL (serverKeys does not list the export's server key)"
+        if not listed:
+            failures += 1
+
+    results = []
     prev_hash: Optional[str] = None
     last_by_mandate: Dict[str, Dict[str, Any]] = {}
 
     for i, r in enumerate(records):
         res: Dict[str, Any] = {"id": r.get("id"), "kind": r.get("kind"), "decision": r.get("decision")}
 
-        # SPEC: hash
+        # §3.2: hash
         try:
             res["hash"] = "OK" if record_hash(r) == r.get("hash") else "FAIL"
         except (TypeError, ValueError) as e:
             res["hash"] = f"FAIL ({e})"
 
-        # SPEC: chain link
+        # §3.3: chain link
         if i == 0:
             res["link"] = "OK (genesis)" if r.get("prevHash") == GENESIS else "EXTERNAL (chain starts before this file)"
         else:
             res["link"] = "OK" if r.get("prevHash") == prev_hash else "FAIL"
         prev_hash = r.get("hash")
 
-        # SPEC: v2 per-mandate chain
+        # §3.3: v2 per-mandate chain
         if r.get("v") == 2 and not isinstance(r.get("v"), bool):
             m = r.get("mandateId")
             last = last_by_mandate.get(m)
@@ -291,15 +407,20 @@ def verify_nachweis(doc: Dict[str, Any], server_key: Optional[str] = None) -> Di
                 res["mandateLink"] = "EXTERNAL (earlier records of this mandate are not in this file)"
             last_by_mandate[m] = r
 
-        # SPEC: Ed25519 over the raw 32-byte hash (signature encoding base64url is OBSERVED)
-        if pub is not None:
-            try:
-                raw = bytes.fromhex(r.get("hash", ""))
-                res["signature"] = "OK" if len(raw) == 32 and _ed25519_ok(pub, r.get("signature"), raw) else "FAIL"
-            except ValueError:
-                res["signature"] = "FAIL"
+        # §3.5 and §4: Ed25519 over the raw 32-byte hash, by the key valid at createdAt
+        if server is not None:
+            key = server_key_at(doc.get("serverKeys"), r.get("createdAt"), server)
+            if pinned and key not in pinned:
+                res["signature"] = f"FAIL (signed by {key}, which is not pinned)"
+            else:
+                pub = _key_bytes(key)
+                try:
+                    raw = bytes.fromhex(r.get("hash", ""))
+                    res["signature"] = "OK" if pub and len(raw) == 32 and _ed25519_ok(pub, r.get("signature"), raw) else "FAIL"
+                except (TypeError, ValueError):
+                    res["signature"] = "FAIL"
 
-        # OBSERVED: intentHash and the agent's own signature over the intent
+        # §3.4 and §3.6: intentHash and the agent's own signature over the intent
         intent = r.get("intent")
         if isinstance(intent, dict) and "intentHash" in r:
             res["intentHash"] = "OK" if intent_hash(intent) == r["intentHash"] else "FAIL"
@@ -317,18 +438,20 @@ def verify_nachweis(doc: Dict[str, Any], server_key: Optional[str] = None) -> Di
             failures += 1
         results.append(res)
 
-    report: Dict[str, Any] = {"records": results}
+    report["records"] = results
 
-    # OBSERVED: export-level proof = Ed25519 over canonical JSON of the document without "proof"
+    # §3.7: export proof = Ed25519 by `server` over JCS(document without "proof")
     proof = doc.get("proof") if doc else None
-    if isinstance(proof, dict) and pub is not None:
+    if isinstance(proof, dict) and isinstance(doc.get("server"), str):
         body = {k: v for k, v in doc.items() if k != "proof"}
-        ok = _ed25519_ok(pub, proof.get("signature"), canonicalize(body).encode("utf-8"))
+        pub = _key_bytes(_bare(doc["server"]))
+        ok = bool(pub) and _ed25519_ok(pub, proof.get("signature"), canonicalize(body).encode("utf-8"))
         vm = proof.get("verificationMethod")
-        if vm and doc.get("server") and vm.split("#")[0] != doc["server"].split("#")[0]:
-            warnings.append("proof.verificationMethod differs from server")
-        report["exportProof"] = "OK" if ok else "FAIL"
-        if not ok:
+        by_server = not isinstance(vm, str) or _bare(vm) == _bare(doc["server"])
+        if ok and by_server:
+            report["exportProof"] = "OK"
+        else:
+            report["exportProof"] = "FAIL" if by_server else "FAIL (proof.verificationMethod is not the server key)"
             failures += 1
 
     report["warnings"] = warnings
@@ -336,14 +459,81 @@ def verify_nachweis(doc: Dict[str, Any], server_key: Optional[str] = None) -> Di
     return report
 
 
-def verify_root(doc: Dict[str, Any], server_key: Optional[str] = None) -> Dict[str, Any]:
-    """OBSERVED: a signed daily root (GET /v1/roots/{date}) is signed with Ed25519
-    over the canonical JSON of the root document without "signature"."""
+_TREE_HEADS = ("merkle-root/v1", "merkle-checkpoint/v1")
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def verify_root(doc: Dict[str, Any], server_key: PinnedKeys = None) -> Dict[str, Any]:
+    """§6: a signed daily root (merkle-root/v1) or hourly checkpoint (merkle-checkpoint/v1):
+    Ed25519 by `server` over the canonical JSON of the document without "signature"."""
+    if not isinstance(doc, dict):
+        raise ValueError("not a JSON object")
     warnings: List[str] = []
-    pub = _resolve_key(doc.get("server"), server_key, warnings)
-    if pub is None:
+    if doc.get("format") not in (None,) + _TREE_HEADS:
+        warnings.append(f"unknown format {doc.get('format')!r}")
+    pinned = _pinned_set(server_key)
+    if isinstance(doc.get("server"), str):
+        server: Optional[str] = _bare(doc["server"])
+    else:
+        server = next(iter(pinned)) if pinned and len(pinned) == 1 else None
+    if server is None:
         raise ValueError("no server key")
-    body = {k: v for k, v in doc.items() if k != "signature"}
-    ok = _ed25519_ok(pub, doc.get("signature"), canonicalize(body).encode("utf-8"))
-    return {"date": doc.get("date"), "root": doc.get("root"), "treeSize": doc.get("treeSize"),
-            "signature": "OK" if ok else "FAIL", "warnings": warnings, "ok": ok}
+    if pinned is None:
+        warnings.append(_SELF_ASSERTED)
+    if pinned and server not in pinned:
+        sig = f"FAIL ({server} is not a pinned key)"
+    else:
+        pub = _key_bytes(server)
+        body = {k: v for k, v in doc.items() if k != "signature"}
+        sig = "OK" if pub and _ed25519_ok(pub, doc.get("signature"), canonicalize(body).encode("utf-8")) else "FAIL"
+    return {"format": doc.get("format"), "date": doc.get("date"), "id": doc.get("id"), "root": doc.get("root"),
+            "treeSize": doc.get("treeSize"), "signature": sig, "warnings": warnings, "ok": sig == "OK"}
+
+
+def verify_proof(doc: Dict[str, Any], server_key: PinnedKeys = None, record_hash: Optional[str] = None) -> Dict[str, Any]:
+    """§5: an inclusion proof (merkle-proof/v1 with `root`, or merkle-checkpoint-proof/v1 with
+    `checkpoint`): the signed tree head verifies and the record's leaf is in it. Pass
+    `record_hash` (the `hash` of the record in your Nachweis) to bind the proof to it."""
+    if not isinstance(doc, dict):
+        raise ValueError("not a JSON object")
+    checkpoint = doc.get("format") == "merkle-checkpoint-proof/v1"
+    head = doc.get("checkpoint" if checkpoint else "root")
+    head_format = "merkle-checkpoint/v1" if checkpoint else "merkle-root/v1"
+    if not isinstance(head, dict):
+        raise ValueError(f"proof has no {head_format} document")
+    signed = verify_root(head, server_key)
+    warnings = list(signed["warnings"])
+    path = doc.get("auditPath")
+    rh = doc.get("recordHash")
+    if head.get("format") != head_format:
+        inclusion = f"FAIL (expected a {head_format} document)"
+    elif not isinstance(rh, str) or not _HEX64.match(rh):
+        inclusion = "FAIL (recordHash is not 64 hex)"
+    elif not isinstance(head.get("root"), str) or not _HEX64.match(head["root"]):
+        inclusion = "FAIL (root is not 64 hex)"
+    elif not isinstance(path, list) or not all(isinstance(h, str) and _HEX64.match(h) for h in path):
+        inclusion = "FAIL (auditPath must be a list of 64-hex hashes)"
+    else:
+        ok = verify_inclusion(record_leaf(rh), doc.get("leafIndex"), head.get("treeSize"),
+                              [bytes.fromhex(h) for h in path], bytes.fromhex(head["root"]))
+        inclusion = "OK" if ok else "FAIL"
+    report: Dict[str, Any] = {"format": doc.get("format"), "recordId": doc.get("recordId"), "recordHash": rh,
+                              "leafIndex": doc.get("leafIndex"), "treeSize": head.get("treeSize"),
+                              "signature": signed["signature"], "inclusion": inclusion}
+    if record_hash is not None:
+        report["record"] = "OK" if record_hash == rh else "FAIL (proof is for a different record hash)"
+    else:
+        warnings.append("proof not bound to a record: pass the record's hash (--record-hash) to check it is the one in your Nachweis")
+    report["warnings"] = warnings
+    report["ok"] = signed["ok"] and inclusion == "OK" and report.get("record", "OK") == "OK"
+    return report
+
+
+def verify_any(doc: Any, server_key: PinnedKeys = None, record_hash: Optional[str] = None) -> Dict[str, Any]:
+    """Dispatch on `format`: a Nachweis export, a signed root or checkpoint, or an inclusion proof."""
+    f = doc.get("format") if isinstance(doc, dict) else None
+    if f in _TREE_HEADS:
+        return {"kind": "tree-head", **verify_root(doc, server_key)}
+    if f in ("merkle-proof/v1", "merkle-checkpoint-proof/v1"):
+        return {"kind": "proof", **verify_proof(doc, server_key, record_hash)}
+    return {"kind": "nachweis", **verify_nachweis(doc, server_key)}

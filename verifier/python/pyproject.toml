@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "prokura-verify"
 version = "0.1.0"
-description = "Offline verifier for Prokura Nachweis (evidence) files and signed daily roots."
+description = "Offline verifier for Prokura Nachweis exports, signed roots and checkpoints, and Merkle inclusion proofs."
 license = { text = "Apache-2.0" }
 requires-python = ">=3.9"
 dependencies = ["cryptography>=41"]

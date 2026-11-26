@@ -1,7 +1,7 @@
 {
   "format": "nachweis/v1",
   "note": "SYNTHETIC test data signed with a throwaway key. Not issued by Prokura.",
-  "server": "did:key:z6MkjvZinzJ2W1xuCpUvXfyBF7vRU2xhpuAgVezu5L9LLnUz",
+  "server": "did:key:z6Mkf4ApgPdwaBJm2wUh76PRrYQRRgwoowir8BtKRZWT1HFb",
   "records": [
     {
       "mandateId": "M1",
@@ -41,7 +41,7 @@
       "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
       "createdAt": "2026-01-01T00:00:00.500Z",
       "hash": "55fd9a576635f5dff9fdb9ceaf1be12f0d782cce836bc10c7b2d6069cf4f97bc",
-      "signature": "cjlBfdyiuhXh4v-x3t4UhWvct-GRfEs1h8QTmPDxhEfcrEC1s5mQ13P_5z92WHYizWN2FPcbr2XKwCh6IznNAg"
+      "signature": "r1m0QewUwFIbA15xOaccOw9ss-Vt1J-aFcsYmA4jV8xjS4MX-R9kH_lI73z-7hVjeELm4Z2APT5fLA7HzSz-AQ=="
     },
     {
       "mandateId": "M1",
@@ -85,7 +85,7 @@
       "createdAt": "2026-01-01T00:00:01.500Z",
       "mandatePrevHash": "0000000000000000000000000000000000000000000000000000000000000000",
       "hash": "df319756e97c8be87e52bc095abe4ea4a837f27a99be75c5a24d4489d7c812ee",
-      "signature": "HZSnw9h2bqc2lAZQcoN4WBpsf7vO8IXkAUgJ7yE3EOc-T7vT0lP4QVu06lwtLmBDQJIkCp0E-gNDKbz1X688Cg"
+      "signature": "Z63NgtSMpAOVUPITqJMxzUfkTiFHwa8-DlO1wUzKffZh68ZwTiEVuBEmEu-_-wsALvcFInar94HTcbJpp3HrBw=="
     },
     {
       "mandateId": "M1",
@@ -129,7 +129,7 @@
       "createdAt": "2026-01-01T00:00:02.500Z",
       "mandatePrevHash": "df319756e97c8be87e52bc095abe4ea4a837f27a99be75c5a24d4489d7c812ee",
       "hash": "ea47506727e0c94ac8703c97fd8cd092bfdbb1e36df1990e4316b85f2b035f59",
-      "signature": "vI1OTF7t3JbVZQbgOlb2FII4xZOcuE2l5rHsEJTUwTzryV2MY3Zw4L2cY1F0qSnSG-vYTi8rLISWjuhwl4RrBQ"
+      "signature": "hO7CeuS4Cm46nN684xBMrIeiyjX4x0sRH7dkNXzTtd6b-Ap-KZNzsFrscW9hSWD5kTqGP6mF0qSXbAVb4ZvJBg=="
     }
   ]
 }

@@ -1,7 +1,7 @@
-// SKETCH. Shared helper: ask the Prokura gate over MCP. Requires an MCP session that
-// already holds a granted mandate (in the public demo: prokura_request_mandate, then a
-// human opens the grant URL). Without one the server answers grant_required/grant_pending
-// and never invents a decision, so treat any non-decision as "do not pay".
+// Shared helper: ask the Prokura gate over MCP. Needs an MCP session that already
+// holds a granted mandate (in the public demo: prokura_request_mandate, then a human
+// opens the grant URL). Without one the server answers grant_required / grant_pending
+// and does not call the gate, so treat anything but a decision as "do not pay".
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
 export type Decision = { decision: "allow" | "step_up" | "deny"; reasons: string[]; raw: unknown };

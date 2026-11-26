@@ -1,11 +1,9 @@
 /**
- * Offline verifier for Prokura Nachweis (evidence) files and signed daily roots.
+ * Offline verifier for Prokura Nachweis exports, signed daily roots, hourly
+ * checkpoints and Merkle inclusion proofs.
  *
- *   SPEC     = stated in https://prokura.network/llms.txt ("Verify a Nachweis")
- *   OBSERVED = not written in llms.txt; matches the verifier on the
- *              prokura.network homepage and real demo files, but may change.
- *
- * See docs/nachweis-format.md for every rule and its source.
+ * Every rule is specified in docs/nachweis-format.md. Section numbers in the
+ * comments below (§n) refer to that document.
  */
 import { createHash, createPublicKey, verify as edVerify } from "node:crypto";
 import canonicalizeLib from "canonicalize";
@@ -15,7 +13,7 @@ const jcs = canonicalizeLib as unknown as (v: unknown) => string | undefined;
 
 export const GENESIS = "0".repeat(64);
 
-/** OBSERVED: the "remaining stored fields" (llms.txt does not enumerate them). */
+/** §3.2: the remaining stored fields, in the object that closes the hashed array. */
 export const RECORD_FIELDS = [
   "id", "kind", "refId", "mandateId", "agentId", "principalId", "intentHash",
   "stepUp", "gateState", "rail", "railStatus", "amount", "currency", "payee",
@@ -32,10 +30,10 @@ export function canonicalize(value: unknown): string {
 
 const sha256Hex = (data: string | Uint8Array) => createHash("sha256").update(data).digest("hex");
 
-/** SPEC: SHA-256 over RFC 8785 [prevHash, intent, decision, reasons, railRef, createdAt, rest]. */
+/** §3.2: SHA-256 over RFC 8785 [prevHash, intent, decision, reasons, railRef, createdAt, rest]. */
 export function recordHash(r: NachweisRecord): string {
   const rest: Record<string, unknown> = {};
-  for (const k of RECORD_FIELDS) rest[k] = r[k]; // undefined keys are dropped by JCS, like the site
+  for (const k of RECORD_FIELDS) rest[k] = r[k]; // a missing key is left out (JCS drops undefined)
   if (r.v === 2) {
     rest.v = 2;
     rest.mandateSeq = r.mandateSeq ?? null;
@@ -45,14 +43,60 @@ export function recordHash(r: NachweisRecord): string {
   return sha256Hex(canonicalize([r.prevHash, r.intent, r.decision, r.reasons, r.railRef, r.createdAt, rest]));
 }
 
-/** OBSERVED: "sha256:" + hex SHA-256 of the canonical intent (signature included). */
+/** §3.4: "sha256:" + hex SHA-256 of the canonical intent, agentSignature included. */
 export const intentHash = (intent: unknown) => "sha256:" + sha256Hex(canonicalize(intent));
 
-/** SPEC: Merkle leaf = SHA-256(0x00 || leaf). Which bytes form a leaf is not specified. */
+/** §5: RFC 9162 leaf hash, SHA-256(0x00 || data). */
 export const merkleLeaf = (leaf: Uint8Array) => createHash("sha256").update(Buffer.from([0])).update(leaf).digest();
-/** SPEC: Merkle node = SHA-256(0x01 || left || right). */
+/** §5: RFC 9162 node hash, SHA-256(0x01 || left || right). */
 export const merkleNode = (l: Uint8Array, r: Uint8Array) =>
   createHash("sha256").update(Buffer.from([1])).update(l).update(r).digest();
+/** §5: the leaf of an evidence record is its 32-byte hash (the raw bytes of the hex `hash`). */
+export const recordLeaf = (recordHashHex: string) => merkleLeaf(Buffer.from(recordHashHex, "hex"));
+
+const split = (n: number) => {
+  let k = 1;
+  while (k * 2 < n) k *= 2;
+  return k;
+};
+
+/** §5: Merkle Tree Hash over leaf hashes (RFC 9162 §2.1.1). The empty tree hashes to SHA-256(""). */
+export function merkleRoot(leaves: Uint8Array[]): Uint8Array {
+  if (leaves.length === 0) return createHash("sha256").digest();
+  if (leaves.length === 1) return leaves[0];
+  const k = split(leaves.length);
+  return merkleNode(merkleRoot(leaves.slice(0, k)), merkleRoot(leaves.slice(k)));
+}
+
+/** §5: audit path for leaf m (RFC 9162 §2.1.3.1). */
+export function inclusionProof(m: number, leaves: Uint8Array[]): Uint8Array[] {
+  if (m < 0 || m >= leaves.length) throw new RangeError("leaf index out of range");
+  if (leaves.length === 1) return [];
+  const k = split(leaves.length);
+  return m < k
+    ? [...inclusionProof(m, leaves.slice(0, k)), merkleRoot(leaves.slice(k))]
+    : [...inclusionProof(m - k, leaves.slice(k)), merkleRoot(leaves.slice(0, k))];
+}
+
+/** §5: verify an audit path (RFC 9162 §2.1.3.2). */
+export function verifyInclusion(leaf: Uint8Array, index: number, treeSize: number, path: Uint8Array[], root: Uint8Array): boolean {
+  if (!Number.isInteger(index) || !Number.isInteger(treeSize) || index < 0 || index >= treeSize) return false;
+  let fn = index;
+  let sn = treeSize - 1;
+  let r: Uint8Array = leaf;
+  for (const p of path) {
+    if (sn === 0) return false;
+    if (fn % 2 === 1 || fn === sn) {
+      r = merkleNode(p, r);
+      if (fn % 2 === 0) while (fn % 2 === 0 && fn !== 0) { fn >>= 1; sn >>= 1; }
+    } else {
+      r = merkleNode(r, p);
+    }
+    fn >>= 1;
+    sn >>= 1;
+  }
+  return sn === 0 && Buffer.from(r).equals(Buffer.from(root));
+}
 
 const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 function b58decode(s: string): Uint8Array {
@@ -88,41 +132,74 @@ function ed25519Ok(pub: Uint8Array, sigB64url: unknown, msg: Uint8Array): boolea
   }
 }
 
-function resolveKey(docKey: unknown, pinned: string | undefined, warnings: string[]): Uint8Array | null {
-  if (pinned) {
-    if (typeof docKey === "string" && docKey.split("#")[0] !== pinned.split("#")[0])
-      warnings.push(`file names server ${docKey}, but the pinned key is ${pinned}; using the pinned key`);
-    return didKeyToEd25519(pinned);
-  }
-  if (typeof docKey === "string") {
-    warnings.push(
-      "server key taken from the file itself (self-asserted). Pin it with --server-key, e.g. the 'server' value of a signed daily root from GET https://api.prokura.network/v1/roots/{date}",
-    );
-    return didKeyToEd25519(docKey);
-  }
-  return null;
+/** A pinned key, a list of pinned keys (the published key ring), or nothing. */
+export type PinnedKeys = string | string[] | undefined;
+
+const bareDid = (k: string) => k.split("#")[0];
+const pinnedSet = (p: PinnedKeys) =>
+  p === undefined || (Array.isArray(p) && p.length === 0) ? undefined : new Set([p].flat().map(bareDid));
+const SELF_ASSERTED =
+  "server key taken from the file itself (self-asserted). Pin it with --server-key: the 'evidence' key from GET https://api.prokura.network/v1/public/keys, or the 'server' of a signed daily root";
+
+/** §4: the key that signed a record: the serverKeys window that contains its createdAt, else `server`. */
+export function serverKeyAt(keys: unknown, createdAt: unknown, fallback: string): string {
+  if (!Array.isArray(keys) || typeof createdAt !== "string") return fallback;
+  const t = Date.parse(createdAt);
+  const k = keys.find(
+    (w: any) => w && typeof w.id === "string" && Date.parse(w.validFrom) <= t && (w.validUntil == null || t < Date.parse(w.validUntil)),
+  );
+  return k?.id ?? fallback;
+}
+
+/** Ed25519 public key for a did:key, or null if it is not one. */
+function keyBytes(did: string): Uint8Array | null {
+  try { return didKeyToEd25519(did); } catch { return null; }
 }
 
 export interface RecordResult { id: unknown; kind: unknown; decision: unknown; [check: string]: unknown }
-export interface Report { ok: boolean; records: RecordResult[]; exportProof?: string; warnings: string[] }
+export interface Report {
+  ok: boolean;
+  records: RecordResult[];
+  exportProof?: string;
+  /** Set only on failure: the export's server key is not among the pinned keys. */
+  serverKey?: string;
+  /** Set when the export carries serverKeys (a key rotation). */
+  serverKeys?: string;
+  warnings: string[];
+}
 
 const isFail = (v: unknown) => typeof v === "string" && v.startsWith("FAIL");
 
-export function verifyNachweis(input: unknown, opts: { serverKey?: string } = {}): Report {
+export function verifyNachweis(input: unknown, opts: { serverKey?: PinnedKeys } = {}): Report {
   const warnings: string[] = [];
   const doc = (Array.isArray(input) ? {} : (input ?? {})) as Record<string, any>;
   const records = (Array.isArray(input) ? input : doc.records) as NachweisRecord[] | undefined;
   if (!Array.isArray(records) || records.length === 0) throw new Error("no records found");
   if (doc.format !== undefined && doc.format !== "nachweis/v1") warnings.push(`unknown format ${JSON.stringify(doc.format)}`);
 
-  const pub = resolveKey(doc.server, opts.serverKey, warnings);
-  if (!pub) warnings.push("no server key: record signatures not checked");
+  const pinned = pinnedSet(opts.serverKey);
+  // A bare list of records has no `server`; a single pinned key stands in for it.
+  const server: string | undefined =
+    typeof doc.server === "string" ? bareDid(doc.server) : pinned?.size === 1 ? [...pinned][0] : undefined;
+  if (!server) warnings.push("no server key: record signatures not checked");
+  else if (!pinned) warnings.push(SELF_ASSERTED);
   const subjectId: string | undefined = doc.credential?.credentialSubject?.id;
 
   const results: RecordResult[] = [];
   let failures = 0;
   let prev: string | undefined;
   const lastByMandate = new Map<unknown, NachweisRecord>();
+
+  const report: Report = { ok: false, records: results, warnings };
+  if (pinned && server && !pinned.has(server)) {
+    report.serverKey = `FAIL (${server} is not a pinned key)`;
+    failures++;
+  }
+  if (doc.serverKeys !== undefined) {
+    const listed = Array.isArray(doc.serverKeys) && doc.serverKeys.some((k: any) => k?.id === doc.server);
+    report.serverKeys = listed ? "OK" : "FAIL (serverKeys does not list the export's server key)";
+    if (!listed) failures++;
+  }
 
   records.forEach((r, i) => {
     const res: RecordResult = { id: r.id, kind: r.kind, decision: r.decision };
@@ -144,9 +221,12 @@ export function verifyNachweis(input: unknown, opts: { serverKey?: string } = {}
       lastByMandate.set(r.mandateId, r);
     }
 
-    if (pub) {
+    if (server) {
+      const key = serverKeyAt(doc.serverKeys, r.createdAt, server);
+      const pub = keyBytes(key);
       const h = typeof r.hash === "string" && /^[0-9a-f]{64}$/.test(r.hash) ? Buffer.from(r.hash, "hex") : null;
-      res.signature = h && ed25519Ok(pub, r.signature, h) ? "OK" : "FAIL";
+      if (pinned && !pinned.has(key)) res.signature = `FAIL (signed by ${key}, which is not pinned)`;
+      else res.signature = pub && h && ed25519Ok(pub, r.signature, h) ? "OK" : "FAIL";
     }
 
     const intent = r.intent as Record<string, any> | undefined;
@@ -165,25 +245,80 @@ export function verifyNachweis(input: unknown, opts: { serverKey?: string } = {}
     results.push(res);
   });
 
-  const report: Report = { ok: false, records: results, warnings };
-  if (doc.proof && typeof doc.proof === "object" && pub) {
+  if (doc.proof && typeof doc.proof === "object" && typeof doc.server === "string") {
     const { proof, ...body } = doc;
-    const ok = ed25519Ok(pub, proof.signature, Buffer.from(canonicalize(body)));
-    if (proof.verificationMethod && typeof doc.server === "string" && proof.verificationMethod.split("#")[0] !== doc.server.split("#")[0])
-      warnings.push("proof.verificationMethod differs from server");
-    report.exportProof = ok ? "OK" : "FAIL";
-    if (!ok) failures++;
+    const pub = keyBytes(bareDid(doc.server));
+    const ok = !!pub && ed25519Ok(pub, proof.signature, Buffer.from(canonicalize(body)));
+    const byServer = typeof proof.verificationMethod !== "string" || bareDid(proof.verificationMethod) === bareDid(doc.server);
+    report.exportProof = ok && byServer ? "OK" : byServer ? "FAIL" : "FAIL (proof.verificationMethod is not the server key)";
+    if (!ok || !byServer) failures++;
   }
   report.ok = failures === 0;
   return report;
 }
 
-/** OBSERVED: daily root signature = Ed25519 over canonical JSON of the root without "signature". */
-export function verifyRoot(doc: Record<string, any>, opts: { serverKey?: string } = {}) {
+const SIGNED_TREE_HEADS = ["merkle-root/v1", "merkle-checkpoint/v1"];
+
+/** §6: a signed daily root or hourly checkpoint: Ed25519 by `server` over JCS(document without "signature"). */
+export function verifyRoot(doc: Record<string, any>, opts: { serverKey?: PinnedKeys } = {}) {
   const warnings: string[] = [];
-  const pub = resolveKey(doc.server, opts.serverKey, warnings);
-  if (!pub) throw new Error("no server key");
+  if (!doc || typeof doc !== "object") throw new Error("not a JSON object");
+  if (doc.format !== undefined && !SIGNED_TREE_HEADS.includes(doc.format)) warnings.push(`unknown format ${JSON.stringify(doc.format)}`);
+  const pinned = pinnedSet(opts.serverKey);
+  const server = typeof doc.server === "string" ? bareDid(doc.server) : pinned?.size === 1 ? [...pinned][0] : undefined;
+  if (!server) throw new Error("no server key");
+  if (!pinned) warnings.push(SELF_ASSERTED);
+  const pub = keyBytes(server);
   const { signature, ...body } = doc;
-  const ok = ed25519Ok(pub, signature, Buffer.from(canonicalize(body)));
-  return { date: doc.date, root: doc.root, treeSize: doc.treeSize, signature: ok ? "OK" : "FAIL", warnings, ok };
+  let sig: string;
+  if (pinned && !pinned.has(server)) sig = `FAIL (${server} is not a pinned key)`;
+  else sig = pub && ed25519Ok(pub, signature, Buffer.from(canonicalize(body))) ? "OK" : "FAIL";
+  return {
+    format: doc.format, date: doc.date, id: doc.id, root: doc.root, treeSize: doc.treeSize,
+    signature: sig, warnings, ok: sig === "OK",
+  };
+}
+
+const HEX64 = /^[0-9a-f]{64}$/;
+
+/**
+ * §5: an inclusion proof (merkle-proof/v1 with `root`, or merkle-checkpoint-proof/v1
+ * with `checkpoint`): the signed tree head verifies, and the record's leaf is in it.
+ * Pass `recordHash` (the `hash` of the record in your Nachweis) to bind the proof to it.
+ */
+export function verifyProof(doc: Record<string, any>, opts: { serverKey?: PinnedKeys; recordHash?: string } = {}) {
+  if (!doc || typeof doc !== "object") throw new Error("not a JSON object");
+  const head = doc.format === "merkle-checkpoint-proof/v1" ? doc.checkpoint : doc.root;
+  const headFormat = doc.format === "merkle-checkpoint-proof/v1" ? "merkle-checkpoint/v1" : "merkle-root/v1";
+  if (!head || typeof head !== "object") throw new Error(`proof has no ${headFormat} document`);
+  const signed = verifyRoot(head, opts);
+  const warnings = [...signed.warnings];
+  const fail = (m: string) => `FAIL (${m})`;
+  let inclusion: string;
+  if (head.format !== headFormat) inclusion = fail(`expected a ${headFormat} document`);
+  else if (typeof doc.recordHash !== "string" || !HEX64.test(doc.recordHash)) inclusion = fail("recordHash is not 64 hex");
+  else if (typeof head.root !== "string" || !HEX64.test(head.root)) inclusion = fail("root is not 64 hex");
+  else if (!Array.isArray(doc.auditPath) || !doc.auditPath.every((h: unknown) => typeof h === "string" && HEX64.test(h)))
+    inclusion = fail("auditPath must be a list of 64-hex hashes");
+  else
+    inclusion = verifyInclusion(
+      recordLeaf(doc.recordHash), doc.leafIndex, head.treeSize,
+      doc.auditPath.map((h: string) => Buffer.from(h, "hex")), Buffer.from(head.root, "hex"),
+    ) ? "OK" : "FAIL";
+  let record: string | undefined;
+  if (opts.recordHash !== undefined) record = opts.recordHash === doc.recordHash ? "OK" : fail("proof is for a different record hash");
+  else warnings.push("proof not bound to a record: pass the record's hash (--record-hash) to check it is the one in your Nachweis");
+  const ok = signed.ok && inclusion === "OK" && (record === undefined || record === "OK");
+  return {
+    format: doc.format, recordId: doc.recordId, recordHash: doc.recordHash, leafIndex: doc.leafIndex,
+    treeSize: head.treeSize, signature: signed.signature, inclusion, ...(record ? { record } : {}), warnings, ok,
+  };
+}
+
+/** Dispatch on `format`: a Nachweis export, a signed root or checkpoint, or an inclusion proof. */
+export function verifyAny(doc: any, opts: { serverKey?: PinnedKeys; recordHash?: string } = {}) {
+  const f = doc?.format;
+  if (f === "merkle-root/v1" || f === "merkle-checkpoint/v1") return { kind: "tree-head" as const, ...verifyRoot(doc, opts) };
+  if (f === "merkle-proof/v1" || f === "merkle-checkpoint-proof/v1") return { kind: "proof" as const, ...verifyProof(doc, opts) };
+  return { kind: "nachweis" as const, ...verifyNachweis(doc, opts) };
 }
