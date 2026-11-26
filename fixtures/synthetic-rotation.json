@@ -1,0 +1,105 @@
+{
+  "format": "nachweis/v1",
+  "exportedAt": "2026-02-01T12:00:00.000Z",
+  "subject": "K1",
+  "records": [
+    {
+      "mandateId": "M1",
+      "agentId": "did:key:example-agent",
+      "principalId": "did:web:example.org",
+      "rail": "mollie",
+      "amount": "9.00",
+      "currency": "EUR",
+      "payee": {
+        "type": "domain",
+        "value": "example.org"
+      },
+      "id": "K1",
+      "kind": "check",
+      "decision": "allow",
+      "reasons": [
+        "OK"
+      ],
+      "railRef": null,
+      "railStatus": null,
+      "refId": null,
+      "stepUp": null,
+      "gateState": {
+        "now": "2026-02-01T09:00:00.000Z"
+      },
+      "intent": {
+        "amount": "9.00",
+        "currency": "EUR",
+        "payee": {
+          "type": "domain",
+          "value": "example.org"
+        },
+        "purpose": "software",
+        "rail": "mollie"
+      },
+      "intentHash": "sha256:0177c57a3f8a3dd35b0003c357f78fbb42c60ecd10253330c7105f601ac18bdf",
+      "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "createdAt": "2026-02-01T09:00:00.000Z",
+      "hash": "717897516a432a33da8e7d1c95a210168167133d6adaa58fc95be0df77123869",
+      "signature": "9cXrVgPqcC-uCJSUJFNJUcrvAOqzKDl2-Hy-pQ8QqeY6fyg522K3sEWBtO09yAen-iqVOy2sqpFC_rRaWwsdBA=="
+    },
+    {
+      "mandateId": "M1",
+      "agentId": "did:key:example-agent",
+      "principalId": "did:web:example.org",
+      "rail": "mollie",
+      "amount": "9.00",
+      "currency": "EUR",
+      "payee": {
+        "type": "domain",
+        "value": "example.org"
+      },
+      "id": "K2",
+      "kind": "check",
+      "decision": "allow",
+      "reasons": [
+        "OK"
+      ],
+      "railRef": null,
+      "railStatus": null,
+      "refId": null,
+      "stepUp": null,
+      "gateState": {
+        "now": "2026-02-01T11:00:00.000Z"
+      },
+      "intent": {
+        "amount": "9.00",
+        "currency": "EUR",
+        "payee": {
+          "type": "domain",
+          "value": "example.org"
+        },
+        "purpose": "software",
+        "rail": "mollie"
+      },
+      "intentHash": "sha256:0177c57a3f8a3dd35b0003c357f78fbb42c60ecd10253330c7105f601ac18bdf",
+      "prevHash": "717897516a432a33da8e7d1c95a210168167133d6adaa58fc95be0df77123869",
+      "createdAt": "2026-02-01T11:00:00.000Z",
+      "hash": "950b1880d1cc8e9a16ff88fcb79a830675f57e4e2c879040a68884dedfbf33c2",
+      "signature": "byH5IW1kU0XFGobGk76F1Lh3CKRPQknzlfLpuWh3g0KFUxvMWj4jDRiMTks5oJC2lVHKjXGOwCNJzdonBp8XAw=="
+    }
+  ],
+  "server": "did:key:z6MkqMgruAs1r4P6SCdwaTctPz3iN6FQxcN8nPSBtYMK836x",
+  "serverKeys": [
+    {
+      "id": "did:key:z6MkeYGBjSg865jFRtwkC5nVwtvouv35XjHqkpRri4jZGGNC",
+      "validFrom": "2026-01-01T00:00:00.000Z",
+      "validUntil": "2026-02-01T10:00:00.000Z"
+    },
+    {
+      "id": "did:key:z6MkqMgruAs1r4P6SCdwaTctPz3iN6FQxcN8nPSBtYMK836x",
+      "validFrom": "2026-02-01T10:00:00.000Z",
+      "validUntil": null
+    }
+  ],
+  "proof": {
+    "type": "Ed25519Canonical",
+    "verificationMethod": "did:key:z6MkqMgruAs1r4P6SCdwaTctPz3iN6FQxcN8nPSBtYMK836x",
+    "signature": "7IEXdL9VLyn0Q-g_B6Vq1vIfQeZxoeFaOcEqo36e2_3L9wT8j2D75h7WneZed7QZXqYHIGxi0Awuy4MYvUWbBw=="
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "note": "SYNTHETIC test data signed with a throwaway key. Not issued by Prokura.",
+  "rootProof": {
+    "format": "merkle-proof/v1",
+    "recordId": "R2",
+    "recordHash": "df319756e97c8be87e52bc095abe4ea4a837f27a99be75c5a24d4489d7c812ee",
+    "leafIndex": 1,
+    "auditPath": [
+      "4bfda6ad82256fb6e32abdf29b8eba1a55d373681faa35186588b9c7f80112ad",
+      "671bd1e9ea93098cd1b9b813e5d0e73bcb55fa0b0303c2a4d695ddd925c5ddc5"
+    ],
+    "root": {
+      "format": "merkle-root/v1",
+      "date": "2026-01-01",
+      "treeSize": 3,
+      "root": "37faa6686401e674b013718c8fd59950f7eb7c39437f520238fa2c22a0f5ba2a",
+      "firstRecordId": "R1",
+      "lastRecordId": "R3",
+      "publishedAt": "2026-01-02T00:05:00.000Z",
+      "server": "did:key:z6Mkf4ApgPdwaBJm2wUh76PRrYQRRgwoowir8BtKRZWT1HFb",
+      "signature": "wAY3sY80tN6ADNQi0uVY1LsytfMQvvmq91KT1ckaHSlGifTPw1GBbnrl8yxeld6yIVGc6_0nqzAwpiMigdNaDg=="
+    }
+  },
+  "checkpointProof": {
+    "format": "merkle-checkpoint-proof/v1",
+    "recordId": "R3",
+    "recordHash": "ea47506727e0c94ac8703c97fd8cd092bfdbb1e36df1990e4316b85f2b035f59",
+    "leafIndex": 2,
+    "auditPath": [
+      "1e1829309f2d289c687f0d3e9c5067890cc8ad06b45504173c8d9d73248dfafc"
+    ],
+    "checkpoint": {
+      "format": "merkle-checkpoint/v1",
+      "id": "2026-01-01T00",
+      "date": "2026-01-01",
+      "from": "2026-01-01T00:00:00.000Z",
+      "to": "2026-01-01T01:00:00.000Z",
+      "treeSize": 3,
+      "root": "37faa6686401e674b013718c8fd59950f7eb7c39437f520238fa2c22a0f5ba2a",
+      "firstRecordId": "R1",
+      "lastRecordId": "R3",
+      "publishedAt": "2026-01-01T01:00:31.000Z",
+      "server": "did:key:z6Mkf4ApgPdwaBJm2wUh76PRrYQRRgwoowir8BtKRZWT1HFb",
+      "signature": "DR4WVRI_eMOP4UZDpgFBl6XvrOKhez2D-DXbDDXl_88kNVRsf6m__PfHTq6F7jT9p35Yi5SOgXflhmXP4NxKDA=="
+    }
+  }
+}

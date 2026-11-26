@@ -1,34 +1,34 @@
 # Reason codes
 
-Copied from [prokura.network/reason-codes](https://prokura.network/reason-codes) and [llms.txt](https://prokura.network/llms.txt). The site is the source of truth; if this file and the site disagree, the site wins.
+Every decision of the Prokura gate comes with reason codes from one closed list. The list is part of the Nachweis format: a record with a code outside it does not validate, and we add codes only through a change to this specification.
 
-The list is closed (it comes from the core schema). The gate appends **every** failing check, then decides:
+The gate runs every check below in a fixed order, appends the code of each check that fails (each code at most once), and then decides:
 
 - nothing failed → `allow`, reasons `["OK"]`
-- the only reason is `FOUR_EYES_REQUIRED` → `step_up` (a human approves with a passkey)
-- any other reason present → `deny`
+- the only failing code is `FOUR_EYES_REQUIRED` → `step_up`: a human approves (or rejects) with a passkey
+- any other code → `deny`
 
-There is no model in this path.
+There is no model in this path. The gate is a pure function of the credential, the intent and the recorded gate state (`gateState`), so a decision can be re-run from its Nachweis.
 
-| Code | Meaning |
+| Code | When |
 |---|---|
-| `OK` | Every check passed. The decision is allow. |
-| `MANDATE_EXPIRED` | The gate's clock is on or after the credential `validUntil`. |
-| `MANDATE_REVOKED` | The credential's status-list revocation bit is set. |
-| `MANDATE_NOT_YET_VALID` | The gate's clock is before the credential `validFrom`. |
+| `OK` | Every check passed. The decision is `allow`. |
+| `SIGNATURE_INVALID` | The agent's signature on the intent does not verify, the intent's `createdAt` is more than five minutes from the gate's clock, the agent already used the nonce in a payment (a check does not use up its nonce), or the credential's proof or issuer key did not verify. |
 | `AGENT_MISMATCH` | The intent's agent is not the credential subject, or the intent names a different mandate. |
-| `SIGNATURE_INVALID` | The intent signature does not verify, `createdAt` is outside the five-minute window, the nonce was already used, or the credential proof did not verify. |
-| `PAYEE_NOT_ALLOWED` | An IBAN must match exactly. A domain must be an allowed domain or a subdomain of one. |
-| `RAIL_NOT_ALLOWED` | The intent's rail is not in the credential scope. |
-| `PURPOSE_NOT_ALLOWED` | The intent's purpose is not in the credential scope. |
-| `CAP_PER_TX_EXCEEDED` | The amount is above `capPerTx` for that currency. |
-| `CAP_PERIOD_EXCEEDED` | Spend in the current period plus this amount is above `capPeriod`. |
-| `FOUR_EYES_REQUIRED` | The amount is above `fourEyesAbove` and no passkey approval is attached. The only step-up reason. Any other reason forces deny. |
-| `PO_MISSING` | The credential requires a purchase order and the intent has none. |
-| `INVOICE_HASH_MISSING` | The credential requires an invoice hash and the intent has none. |
-| `DUPLICATE_INVOICE` | That invoice hash was already seen for this mandate. |
-| `VOP_MISMATCH` | Reserved in the closed list. The current gate has no verification-of-payee input and does not emit this code. |
-| `MCC_NOT_ALLOWED` | The intent carries an MCC, the credential lists MCCs, and this code is not in the list. |
+| `MANDATE_NOT_YET_VALID` | The gate's clock is before the credential's `validFrom`. |
+| `MANDATE_EXPIRED` | The gate's clock is at or after the credential's `validUntil`. |
+| `MANDATE_REVOKED` | The credential's revocation bit is set in its status list. |
+| `RAIL_NOT_ALLOWED` | The intent's rail is not in the mandate's `rails`. |
+| `PURPOSE_NOT_ALLOWED` | The intent's purpose is not in the mandate's `purposes`. |
+| `PAYEE_NOT_ALLOWED` | No mandate payee matches: an IBAN must be the same IBAN; a domain must be an allowed domain or a subdomain of one. |
+| `MCC_NOT_ALLOWED` | The intent carries an MCC, the mandate lists MCCs, and this one is not among them. |
+| `PO_MISSING` | The mandate requires a purchase order reference and the intent has none. |
+| `INVOICE_HASH_MISSING` | The mandate requires an invoice hash and the intent has none. |
+| `DUPLICATE_INVOICE` | The same principal already has an allowed payment (or an approved step-up) with this invoice hash. |
+| `CAP_PER_TX_EXCEEDED` | The amount is above the mandate's `capPerTx` for that currency. |
+| `CAP_PERIOD_EXCEEDED` | The spend in the current period plus this amount is above `capPeriod`. |
+| `FOUR_EYES_REQUIRED` | The amount is above `fourEyesAbove` and no passkey approval has been verified for this intent. The only code that leads to `step_up`. A rejected step-up is recorded as `deny` with this code. |
+| `VOP_MISMATCH` | Reserved for verification of payee (the payee's name does not match the account). The current gate has no verification-of-payee input and never emits it. |
 
 ## Decision rule in code
 
@@ -41,4 +41,4 @@ function decide(reasons: string[]): "allow" | "step_up" | "deny" {
 }
 ```
 
-You don't need to run this yourself; the gate returns the decision. It's handy for checking that a decision in a Nachweis matches its reasons.
+The gate returns the decision itself. This function is useful for checking that the decision in a Nachweis matches its reasons.

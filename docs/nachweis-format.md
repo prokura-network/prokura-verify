@@ -1,74 +1,236 @@
-# Nachweis format and how the verifiers check it
+# Nachweis format (v1)
 
-A **Nachweis** is a signed evidence record written by the Prokura gate for every decision. This page lists every rule the verifiers in `verifier/` apply and where each rule comes from.
+This is the specification of the evidence Prokura writes: evidence records, the `nachweis/v1` export, our server keys, the Merkle trees over each day of evidence, and the signed roots and checkpoints we publish. The verifiers in [`verifier/`](../verifier) implement every rule on this page, and the section numbers (§n) in their source refer to it.
 
-- **SPEC**: stated on [prokura.network/llms.txt](https://prokura.network/llms.txt) ("Verify a Nachweis") or the FAQ in [llms-full.txt](https://prokura.network/llms-full.txt).
-- **OBSERVED**: not written down on the site. It matches the in-browser verifier on the prokura.network homepage and real demo exports (see `fixtures/`), so the verifiers check it. It could change without notice until Prokura documents it.
+Our gate writes one evidence record for every decision and every event that follows from it. Records are hash-chained, each one is signed with our server key, and a Nachweis export bundles the records of one decision (or one mandate) with the credential they were made under. Anyone can check all of it offline.
 
-## What the spec says (quoted)
+## 1. Conventions
 
-> The record hash is SHA-256 over an RFC 8785 canonical JSON array of the previous hash, the intent, the decision, the reasons, the rail reference, the created-at time, and the remaining stored fields. Version 2 records also hash the per-mandate sequence, mandate previous hash and self-declared agent name. The genesis previous hash is 64 zeros. The server signs the raw hash with Ed25519. Daily roots and hourly checkpoints use a 0x00 leaf prefix and a 0x01 node prefix.
+| Term | Meaning |
+|---|---|
+| `JCS(x)` | RFC 8785 JSON Canonicalization Scheme of `x`, as UTF-8 bytes. Numbers follow RFC 8785 §3.2.2.3. Amounts are decimal strings, so they never go through number formatting. |
+| `SHA-256(x)` | SHA-256 of bytes `x`. Record hashes, roots and audit paths are written as 64 lower-case hex characters. |
+| `sig` | Ed25519 (RFC 8032) signature, written as **base64url with `=` padding** (RFC 4648 §5): 86 characters followed by `==`. |
+| key | `did:key` with a base58btc multibase Ed25519 public key: `did:key:z6Mk…`, multicodec prefix `0xed 0x01` followed by the 32-byte key. |
+| time | ISO 8601 with an offset, written by us in UTC with milliseconds (`2026-11-25T10:31:07.123Z`). |
 
-## Export file (`nachweis/v1`)
+Verifiers should accept unpadded base64url as well, since the signature bytes are the same either way.
 
-`GET /api/demo/evidence/{id}/nachweis` on prokura.network (the "download nachweis (json)" link after a demo run) returns:
+## 2. Evidence record
+
+```jsonc
+{
+  "id": "01M8C9B5F57A16FPSDZP8G8M31",   // ULID
+  "prevHash": "<64 hex>",               // hash of the previous record in the global chain
+  "hash": "<64 hex>",                   // §3.2
+  "kind": "pay",                        // check | pay | approval | rejection | execution | rail_status | revocation | delegation | expiry
+  "refId": null,                        // the record this one follows from (a decision, or a mandate event), else null
+  "mandateId": "01M8C99TD64W7PVCKF0X97TESV",
+  "agentId": "did:key:z6Mk…",           // null for events without an agent
+  "principalId": "did:web:…",           // the credential issuer
+  "intent": { … },                      // §2.1, null for records without an intent
+  "intentHash": "sha256:<64 hex>",      // §3.4, null when intent is null
+  "decision": "allow",                  // allow | step_up | deny, null for events
+  "reasons": ["OK"],                    // closed list, see reason-codes.md
+  "stepUp": null,                       // passkey assertion for approval and rejection records
+  "gateState": { … },                   // §2.2, the gate's inputs besides credential and intent
+  "rail": "mollie",
+  "railRef": null,                      // the rail's reference once a payment executed
+  "railStatus": null,
+  "amount": "12.00",                    // decimal string, two fraction digits
+  "currency": "EUR",
+  "payee": { "type": "domain", "value": "shop.example" },
+  "createdAt": "2026-11-25T10:31:07.123Z",
+  "signature": "<sig>",                 // §3.5
+  "v": 2,                               // hash version, absent on version 1 records
+  "mandateSeq": 3,                      // v2: position among this mandate's records, from 1
+  "mandatePrevHash": "<64 hex>",        // v2: hash of this mandate's previous record, 64 zeros for the first
+  "agentName": "my-agent"               // v2: self-declared by the agent, never verified, may be null
+}
+```
+
+Every field up to `signature` is always present; an empty value is `null` (`reasons` is `[]`).
+
+### 2.1 Intent
+
+The payment intent as the agent signed it:
+
+| Field | Rule |
+|---|---|
+| `mandateId` | the mandate the agent pays under |
+| `agentId` | the agent's `did:key` |
+| `amount` | decimal string with exactly two fraction digits, `^(0\|[1-9]\d{0,15})\.\d{2}$` |
+| `currency` | ISO 4217 code or a stablecoin ticker such as `USDC`, `^[A-Z]{3,5}$` |
+| `payee` | §2.3 |
+| `purpose` | a purpose code the mandate lists |
+| `reference` | object, `{}` when empty: optional `po`, `invoiceHash` (`sha256:<64 hex>`), `description` (≤ 255), `item` (≤ 64), `resource` (the paid URL for x402) |
+| `rail` | the rail that would execute the payment, e.g. `mollie`, `x402` |
+| `protocol` | the protocol the intent came in on: `mcp`, `ap2`, `tap` or `acp` |
+| `mcc` | optional four-digit merchant category code |
+| `nonce` | `^[A-Za-z0-9_-]{16,64}$`, unique per agent |
+| `createdAt` | must be within five minutes of the gate's clock |
+| `agentSignature` | §3.6 |
+
+### 2.2 Gate state
+
+`gateState` records everything the gate saw besides the credential and the intent, so a decision can be re-run later: `now`, `spentThisPeriod` (decimal string), `seenInvoiceHashes` and `seenNonces` (only the values relevant to this intent), `revocationBit`, `credentialProofValid` and `stepUpApproved`.
+
+### 2.3 Payee
+
+A payee is one of two types:
+
+| `type` | `value` | Matches a mandate entry when |
+|---|---|---|
+| `iban` | IBAN without spaces, `^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$` | it is the same IBAN |
+| `domain` | lower-case domain name | it is the entry's domain or a subdomain of it |
+
+Both carry an optional display `name`. Payments over x402 use the `domain` type: the payee is the domain of the paid resource, and the resource URL goes into `reference.resource` (see [`integrations/x402`](../integrations/x402/README.md)). There is no wallet-address payee type in v1.
+
+## 3. Verification rules
+
+### 3.1 Genesis
+
+The first record of the global chain has `prevHash` = 64 zeros. The first record of each mandate (v2) has `mandateSeq` = 1 and `mandatePrevHash` = 64 zeros.
+
+### 3.2 Record hash
+
+```text
+hash = hex(SHA-256(JCS([prevHash, intent, decision, reasons, railRef, createdAt, rest])))
+```
+
+`rest` is an object with exactly these keys: `id, kind, refId, mandateId, agentId, principalId, intentHash, stepUp, gateState, rail, railStatus, amount, currency, payee`. For a record with `v: 2`, `rest` also contains `v: 2`, `mandateSeq`, `mandatePrevHash` and `agentName` (`null` when absent). A record without `v` is hashed without those four keys, so records written before version 2 still verify. JCS sorts the keys, so their order above does not matter.
+
+### 3.3 Chain links
+
+- **Global chain:** each record's `prevHash` is the `hash` of the record before it in our ledger. An export holds a slice of that chain, so its first record usually links to a record outside the file; verifiers report that as `EXTERNAL`, not as a failure.
+- **Mandate chain (v2):** within one mandate, `mandatePrevHash` is the `hash` of that mandate's previous record and `mandateSeq` goes up by one.
+
+### 3.4 Intent hash
+
+```text
+intentHash = "sha256:" + hex(SHA-256(JCS(intent)))
+```
+
+over the whole intent object as stored in the record, **including** `agentSignature`, and with `reference` as stored (`{}` when the agent sent none). Approval and rejection records carry the `intentHash` of the decision they settle.
+
+### 3.5 Server signature on a record
+
+`signature = sig` by the server key (§4) over the **32 raw bytes** of `hash` (not the hex string, not JCS).
+
+### 3.6 Agent signature on an intent
+
+`agentSignature = sig` by `intent.agentId` over `JCS(intent without agentSignature)`. The agent must be the credential subject (`credential.credentialSubject.id`); otherwise the gate answers `AGENT_MISMATCH`.
+
+### 3.7 Export (`nachweis/v1`) and its proof
 
 ```jsonc
 {
   "format": "nachweis/v1",
   "exportedAt": "…",
-  "subject": "<evidence id this export is about>",
-  "records": [ /* the session's records, in chain order */ ],
-  "credential": { /* the Prokura Credential (W3C VC 2.0) */ },
-  "issuerDidDocument": { /* DID document of the credential issuer */ },
-  "server": "did:key:z6Mk…",            // evidence-signing key
-  "proof": { "type": "Ed25519Canonical", "verificationMethod": "did:key:…", "signature": "<base64url>" }
+  "subject": "<id of the record this export is about>",
+  "records": [ /* the subject and the records that follow from it, in chain order;
+                  a session export holds the mandate's whole chain */ ],
+  "credential": { /* the mandate: a W3C Verifiable Credential 2.0 */ },
+  "issuerDidDocument": { /* optional: the did:web issuer's DID document as we know it */ },
+  "server": "did:key:z6Mk…",           // the key that signs this export
+  "serverKeys": [ /* only after a key rotation, §4 */ ],
+  "proof": { "type": "Ed25519Canonical", "verificationMethod": "<server>", "signature": "<sig>" }
 }
 ```
 
-## Checks
+`proof.signature = sig` by `server` over `JCS(export without "proof")`, and `proof.verificationMethod` equals `server`. Every top-level field except `proof` is covered, so nothing may be added to a signed export.
 
-| # | Check | Rule | Source |
-|---|---|---|---|
-| 1 | `hash` | `hex(SHA-256(JCS([prevHash, intent, decision, reasons, railRef, createdAt, rest])))` equals `record.hash` | SPEC (array order) |
-| 1a | `rest` | Object with the keys `id, kind, refId, mandateId, agentId, principalId, intentHash, stepUp, gateState, rail, railStatus, amount, currency, payee`. A key missing from the record is left out, as JavaScript drops `undefined`. | OBSERVED: the spec says "the remaining stored fields" and doesn't list them |
-| 1b | v2 fields | If `v === 2`, `rest` also gets `v: 2, mandateSeq, mandatePrevHash, agentName` (missing → `null`) | SPEC names the fields; key names and `v` placement OBSERVED |
-| 2 | `link` | `prevHash` equals the previous record's `hash`. The first record of the whole ledger has `prevHash` = 64 zeros. | SPEC |
-| 3 | `mandateLink` (v2) | Within one mandate, `mandatePrevHash` equals the previous record's `hash` for that mandate, and `mandateSeq` goes up by 1. The record with `mandateSeq: 1` has `mandatePrevHash` = 64 zeros. | SPEC (genesis); link rule matches the homepage verifier |
-| 4 | `signature` | Ed25519 over the **raw 32 bytes** of `hash`, signature base64url-encoded, key = `server` (did:key, multicodec `0xed01`) | SPEC (Ed25519 over raw hash); encodings OBSERVED |
-| 5 | `intentHash` | `"sha256:" + hex(SHA-256(JCS(intent)))`, with `agentSignature` included | OBSERVED |
-| 6 | `agentSignature` | Ed25519 by `intent.agentId` (did:key) over `JCS(intent without agentSignature)`, base64url | OBSERVED |
-| 7 | `agentIsCredentialSubject` | `intent.agentId` equals `credential.credentialSubject.id` | OBSERVED (compare `AGENT_MISMATCH`) |
-| 8 | `exportProof` | Ed25519 by `server` over `JCS(export document without "proof")` | OBSERVED |
-| 9 | Daily root | `GET https://api.prokura.network/v1/roots/{date}` returns `{date, root, format: "merkle-root/v1", server, treeSize, signature, publishedAt, firstRecordId, lastRecordId}`. Ed25519 by `server` over `JCS(root document without "signature")` | Endpoint SPEC (FAQ); signature rule OBSERVED |
+## 4. Server keys and rotation
 
-`link = EXTERNAL` is not a failure. A session export is a slice of one global chain, so its first record usually points at a record from another session, which isn't in the file.
+One key signs records, exports, daily roots and checkpoints. We publish it, and every key that signed before it, at:
 
-## Trusting the key
-
-The export names its own signing key in `server`. Anyone who can edit the file can swap that key, so a file that only verifies against its own key proves nothing about who signed it. Pin the key:
-
-```bash
-curl -s https://api.prokura.network/v1/roots/2026-11-25 | jq -r .server
-# did:key:z6MksY9Gi8N1cbigCxWyR53eLdiTUUTaxq2A1c6mZe5Lea4L   (as of 26 Nov 2026)
-prokura-verify nachweis.json --server-key did:key:z6MksY9Gi8N1cbigCxWyR53eLdiTUUTaxq2A1c6mZe5Lea4L
+```text
+GET https://api.prokura.network/v1/public/keys
 ```
 
-The site doesn't yet name an official key-publication location or a key-rotation policy (see open questions).
+`evidence` is the key that signs now. `keys` lists every key that has signed, oldest first, each with `kid`, `id` (did:key), `publicKeyMultibase`, `validFrom`, `validUntil` (`null` while active) and `status` (`active` or `retired`). A retired key stays in the list and verifies only what it signed inside its window. Every signed daily root also names the key in `server`.
 
-## Not checked (yet)
+When the records of an export span a rotation, the export carries `serverKeys`: the windows `{ id, validFrom, validUntil }` it relies on, including `server`. Each record is checked against the key whose window contains its `createdAt` (`validFrom ≤ createdAt < validUntil`), and against `server` when no window contains it.
 
-- **Merkle inclusion proofs** against the daily root or hourly checkpoints. The spec gives the 0x00/0x01 prefixes, but not which bytes make a leaf (raw hash? hex? full record?), how an odd node is handled, or the proof format. `merkleLeaf`/`merkleNode` are exported, but proof verification is left out instead of guessed.
-- **The credential's own proof** (`DataIntegrityProof`, `eddsa-rdfc-2022`). That needs RDF Dataset Canonicalization; use a VC library. Demo credentials say `grantedBy.method: "demo-unsigned"`.
-- **Revocation** (Bitstring Status List at `credentialStatus.statusListCredential`). This needs the network and is out of scope for an offline verifier.
-- **Gate decisions.** The verifier proves a record is intact and signed. It does not re-run the gate.
+**Pin the keys.** A file names its own signing key, and anyone who edits the file can swap it. Verify against the keys you got from us, not the key in the file:
 
-## Open questions for Prokura (to clear up before calling this a spec)
+```bash
+prokura-verify nachweis.json --server-key did:key:z6Mk…            # one key
+prokura-verify nachweis.json --server-key did:key:z6Mk…,did:key:z6Mk…  # the key ring after a rotation
+```
 
-1. List the "remaining stored fields" (1a) in the spec, including whether a missing field is omitted or `null`.
-2. Document `v` and the v2 key names, and whether a v1 record ever carries `mandateSeq`.
-3. State the encodings: signature = base64url **with padding**, key = `did:key` Ed25519.
-4. Document `intentHash`, `agentSignature`, the export `proof` and the daily-root signature (checks 5, 6, 8, 9).
-5. Publish the evidence key at a stable URL (for example `/.well-known/…`) with a rotation policy.
-6. Define the Merkle leaf bytes, tree shape and inclusion-proof format, and the hourly checkpoint endpoint.
-7. Say whether JCS number handling ever matters (all amounts are strings today, which avoids it).
+## 5. Merkle trees and inclusion proofs
+
+Every UTC day of evidence forms one Merkle tree, built as in RFC 9162 §2.1 (Certificate Transparency v2):
+
+- **Leaves:** the records whose `createdAt` falls in `[date 00:00Z, date+1 00:00Z)`, in chain order. A leaf is the record's 32-byte `hash` (the raw bytes of the hex value): `leaf = SHA-256(0x00 ‖ hash)`.
+- **Nodes:** `node = SHA-256(0x01 ‖ left ‖ right)`. The `0x00` and `0x01` prefixes are the domain separation between leaves and inner nodes.
+- **Shape:** a tree of `n > 1` leaves splits at `k`, the largest power of two smaller than `n`: `MTH(D[0:n]) = node(MTH(D[0:k]), MTH(D[k:n]))`. A tree of one leaf is that leaf hash. An odd leaf is never duplicated: it is promoted to the next level unchanged.
+- **Empty tree:** `SHA-256("")`. We never sign a root or checkpoint over zero records.
+
+An inclusion proof (`GET /v1/evidence/{id}/proof` for a tenant, `GET /v1/session/evidence/{id}/proof` with a demo session token):
+
+```jsonc
+{
+  "format": "merkle-proof/v1",          // or "merkle-checkpoint-proof/v1"
+  "recordId": "01M…",
+  "recordHash": "<64 hex>",
+  "leafIndex": 0,
+  "auditPath": ["<64 hex>", …],        // RFC 9162 §2.1.3.1, from the leaf upwards
+  "root": { /* signed merkle-root/v1, §6 */ }   // "checkpoint" with merkle-checkpoint/v1 instead
+}
+```
+
+To check it:
+
+1. The signed root or checkpoint verifies against a pinned key (§6).
+2. `recordHash` is the `hash` of the record in your Nachweis (`--record-hash`), and that Nachweis verifies.
+3. With `r = SHA-256(0x00 ‖ bytes(recordHash))`, `fn = leafIndex` and `sn = treeSize − 1` (`treeSize` from the signed document, never from the proof alone), run RFC 9162 §2.1.3.2:
+
+   ```text
+   for p in auditPath:
+       if sn == 0: fail
+       if fn is odd or fn == sn:
+           r = SHA-256(0x01 ‖ p ‖ r)
+           if fn is even: while fn is even and fn != 0: fn >>= 1; sn >>= 1
+       else:
+           r = SHA-256(0x01 ‖ r ‖ p)
+       fn >>= 1; sn >>= 1
+   accept iff sn == 0 and r == root
+   ```
+
+`fixtures/merkle-vectors.json` has the roots and every audit path for trees of 0 to 9 leaves.
+
+## 6. Signed daily roots and hourly checkpoints
+
+| | Daily root | Hourly checkpoint |
+|---|---|---|
+| Endpoint | `GET https://api.prokura.network/v1/roots/{YYYY-MM-DD}` | `GET https://api.prokura.network/v1/roots/checkpoints/{YYYY-MM-DDTHH}`, `…/checkpoints/latest` |
+| Covers | `[date 00:00Z, date+1 00:00Z)` | `[date 00:00Z, end of hour HH)`, cumulative within the day |
+| Published | after the UTC day ends | after each hour ends |
+| `format` | `merkle-root/v1` | `merkle-checkpoint/v1` |
+| Fields | `date, treeSize, root, firstRecordId, lastRecordId, publishedAt, server, signature` | `id, date, from, to, treeSize, root, firstRecordId, lastRecordId, publishedAt, server, signature` |
+
+`signature = sig` by `server` over `JCS(document without "signature")`. The `T23` checkpoint covers the whole day and has the daily root's value; earlier checkpoints of a day are prefixes of the same tree. Roots and checkpoints are stored append-only. Keep copies somewhere we do not control: a root you kept is a commitment we cannot rewrite.
+
+## 7. What the offline verifiers in this repository check
+
+| Check | Rule |
+|---|---|
+| `hash` | §3.2 |
+| `link`, `mandateLink` | §3.3 |
+| `signature` | §3.5, with the key from §4 |
+| `intentHash` | §3.4 |
+| `agentSignature` | §3.6 |
+| `agentIsCredentialSubject` | §3.6 |
+| `exportProof`, `serverKey`, `serverKeys` | §3.7, §4 |
+| roots and checkpoints | §6 |
+| inclusion proofs | §5 |
+
+They do not:
+
+- **Verify the credential's own proof** (`DataIntegrityProof`, `eddsa-rdfc-2022`). That needs RDF Dataset Canonicalization; use a Verifiable Credentials library. Demo mandates are granted with `grantedBy.method: "demo-unsigned"`.
+- **Check revocation** against the credential's Bitstring Status List. That needs the network.
+- **Re-run the gate** on the recorded `gateState`, or verify the passkey assertions in approval and rejection records.
+
+Our core verifier checks the credential proof, re-runs the gate on every recorded decision, verifies the passkey assertions, and checks revocation when it is given the status list. A record that passes the checks in this repository is intact and was signed by us; that is not the same as re-validating the decision.

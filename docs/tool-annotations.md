@@ -1,23 +1,19 @@
-# MCP tool annotations for https://prokura.network/mcp
+# MCP tool annotations
 
-**Status (tools/list, 26 Nov 2026, protocol 2025-06-18):** all 7 tools have a top-level `title`, but **none has an `annotations` object**. Anthropic's connector directory requires `title` plus the applicable `readOnlyHint` / `destructiveHint` on every tool and flags tools that lack them. Glama's connector score also reads tool-definition quality.
-
-Ready-to-paste files: `tool-annotations.snippet.ts` (TypeScript SDK) and `tool-annotations.json` (plain map).
+Every tool on `https://prokura.network/mcp` carries a `title` and an MCP `annotations` object (spec 2025-06-18), so clients can tell a dry run from a payment before they call anything. The same values as a plain map: [`tool-annotations.json`](tool-annotations.json).
 
 | Tool | title | readOnly | destructive | idempotent | openWorld | Why |
 |---|---|---|---|---|---|---|
-| `prokura_request_mandate` | Request a demo mandate | false | false | false | false | Creates a pending grant (state on Prokura's side) and returns a URL and QR. Nothing is overwritten or paid. Each call creates a new grant (`"created": true`), limited to 5 per address per hour, so repeating it isn't a no-op. Talks only to Prokura's own approval service. |
-| `prokura_check` | Check a payment | **true** | – | – | false | "Nothing is paid." No spend or budget change. See the note below. |
-| `prokura_pay` | Pay | false | **true** | false | **true** | Executes a payment when the gate allows it. Money that has moved can't be pulled back by another call, and a repeat call is a second payment with a fresh nonce. Only `DUPLICATE_INVOICE` blocks a repeat, and only when an invoice is given. It reaches outside systems: the rail (Mollie) and, with `x402Url`, any HTTP 402 URL. |
+| `prokura_request_mandate` | Request a demo mandate | false | false | false | false | Opens a pending grant on our side and returns its URL and QR code. Nothing is paid or overwritten. Each call can open a new grant (at most 5 per client address per hour), so a repeat is not a no-op. It talks only to our own approval service. |
+| `prokura_check` | Check a payment | **true** | – | – | false | Asks the gate; nothing is paid and no budget is spent. |
+| `prokura_pay` | Pay | false | **true** | false | **true** | Executes a payment when the gate allows it. Money that moved cannot be pulled back by another call, and a repeat is a second payment with a fresh nonce (only `DUPLICATE_INVOICE` stops a repeat, and only when an invoice is given). It reaches outside systems: the payment rail and, with `x402Url`, any HTTP 402 URL. |
 | `prokura_evidence` | Get evidence | true | – | – | false | Reads stored records. |
-| `prokura_mandate` | Get mandate | true | – | – | false | Reads a redacted summary. |
-| `store_catalog` | Fake store catalog | true | – | – | false | Static demo catalog. |
-| `store_quote` | Fake store quote | true | – | – | false | Pure price calculation. |
+| `prokura_mandate` | Get mandate | true | – | – | false | Reads a redacted summary of the mandate. |
+| `store_catalog` | Fake store catalog | true | – | – | false | The demo store's static catalog. |
+| `store_quote` | Fake store quote | true | – | – | false | A price calculation; a quote is not a decision. |
 
-Per the MCP spec, `destructiveHint` and `idempotentHint` only matter when `readOnlyHint` is false, so they are left out of the read-only tools. `annotations.title` repeats the top-level `title` for clients that only read annotations.
+Under the MCP spec, `destructiveHint` and `idempotentHint` only mean something when `readOnlyHint` is false, so the read-only tools leave them out. `annotations.title` repeats the top-level `title` for clients that read only the annotations.
 
-**Note on `prokura_check`:** the real demo exports in `fixtures/` show that a check writes its own signed `kind: "check"` record into the evidence chain (an audit side effect, not a change the caller asked for). Decision: `readOnlyHint: true`, so clients can run a dry-run check without a confirmation prompt.
+**Why `prokura_check` is read-only.** A check writes its own signed `kind: "check"` record into the evidence chain. That record is an audit trail of the question, not a change the caller asked for: no money moves, no budget is used and the nonce stays unused. Marking the tool read-only lets clients run a dry-run check without a confirmation prompt.
 
-**Also worth fixing while you're in there:**
-- `prokura_pay` has no `required` list in its input schema (`prokura_check` requires `amount, payee, purpose`), because `x402Url` can stand in for them. A `oneOf` (either `x402Url` or `amount+payee+purpose`) would make the contract explicit.
-- `prokura_request_mandate` takes `additionalProperties: true` and ignores everything. `{"type":"object","properties":{}}` would say that more plainly. The description already says it ignores input.
+**Arguments of `prokura_pay`.** Give either `x402Url` (amount, payee and rail come from the HTTP 402 challenge), or `amount` + `payee` + `purpose`. The server enforces this when it validates the call. The published input schema stays a plain object with no top-level `oneOf`, because Anthropic's and OpenAI's tool APIs reject tool schemas with `oneOf`, `anyOf` or `allOf` at the top level.

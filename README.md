@@ -1,26 +1,25 @@
 # prokura-verify
 
-Examples and an offline verifier for Prokura Nachweis receipts — the power of attorney for machines.
+The open specification of the Prokura Nachweis, offline verifiers for it, and examples that drive our public demo over MCP.
 
 **Prokura is the power of attorney for machines**: a signed record of which agent may spend for whom, checked before every payment and provable afterwards.
 
-A human signs a mandate for an AI agent: cap, payees, purposes, expiry. Before any payment, a gate with no AI in it checks the mandate and answers **allow**, **step-up** (a human approves) or **deny**, with reason codes. Every decision becomes a signed, hash-chained record, a **Nachweis**, that anyone can verify offline. The network moves the money. Prokura proves the authority behind it.
+A human signs a mandate for an AI agent: cap, payees, purposes, expiry. Before any payment, our gate, which has no AI in it, checks the mandate and answers **allow**, **step-up** (a human approves) or **deny**, with reason codes. Every decision becomes a signed, hash-chained record, a **Nachweis**, that anyone can verify offline. The payment network moves the money. Prokura proves the authority behind it.
 
-What Prokura is not, in its own words: no custody of funds, no payment guarantees, no identity or KYC, no LLM in the decision path, no consumer app.
+What Prokura is not: we hold no funds, give no payment guarantees, do no identity checks or KYC, have no LLM in the decision path, and make no consumer app.
 
-This repository has:
+This repository is the part you can check without trusting us. The gate and the core service are not in it.
 
 | Path | What |
 |---|---|
+| [`docs/nachweis-format.md`](docs/nachweis-format.md) | The Nachweis specification: records, hashes, signatures, keys, Merkle trees and proofs |
+| [`docs/reason-codes.md`](docs/reason-codes.md) | The closed list of reason codes and the decision rule |
+| [`docs/tool-annotations.md`](docs/tool-annotations.md) | What each MCP tool does, and its annotations |
+| [`verifier/`](verifier) | Offline verifiers in Python and TypeScript, tested against real demo exports and a real signed root |
 | [`examples/`](examples) | TypeScript and Python scripts that drive the public demo over MCP |
-| [`verifier/`](verifier) | Offline Nachweis verifiers in TypeScript and Python, tested against real demo files |
-| [`docs/reason-codes.md`](docs/reason-codes.md) | The closed reason-code list and the decision rule |
-| [`docs/nachweis-format.md`](docs/nachweis-format.md) | Every verification rule, its source, and open spec questions |
-| [`integrations/`](integrations) | **Sketches** for coinbase/agentkit, Google AP2 and x402 |
+| [`integrations/`](integrations) | Where Prokura fits with x402, coinbase/agentkit and Google AP2 |
 | [`config/`](config) | Ready MCP client configs |
-| [`server.json`](server.json) | Official MCP Registry entry |
-
-Everything here describes Prokura in terms [prokura.network](https://prokura.network) uses. For anything not covered, [llms.txt](https://prokura.network/llms.txt) is the source of truth.
+| [`server.json`](server.json) | Our entry in the official MCP Registry |
 
 ## Try the demo in your MCP client
 
@@ -50,8 +49,8 @@ Then ask your agent something like: *"Look at the Prokura demo store, get a quot
 
 1. `store_catalog` / `store_quote`: the fake store. A quote is not a decision.
 2. `prokura_request_mandate`: returns a grant URL on `approve.prokura.network` and a QR code. It **never** returns a mandate, and any scope, principal or amount you send is ignored. Authority comes from the human who opens the URL.
-3. Until that grant is done, `prokura_check`, `prokura_pay`, `prokura_evidence` and `prokura_mandate` answer `grant_required` / `grant_pending`. The server will not invent an allow, a step-up or a deny.
-4. After the grant: `prokura_check` asks the gate (nothing is paid). `prokura_pay` submits an intent, and only an allow is executed. `prokura_evidence` fetches the Nachweis.
+3. Until that grant is done, `prokura_check`, `prokura_pay`, `prokura_evidence` and `prokura_mandate` answer `grant_required` / `grant_pending` and the gate is not called: there is no allow, step-up or deny without a human-granted mandate.
+4. After the grant: `prokura_check` asks the gate (nothing is paid). `prokura_pay` submits an intent, and only an allow is executed. `prokura_evidence` fetches the signed evidence records.
 
 ## Run the examples
 
@@ -89,20 +88,22 @@ export proof: OK
 VERIFIED
 ```
 
-The same command verifies a signed daily root: `curl -s https://api.prokura.network/v1/roots/2026-11-25 > root.json && prokura-verify root.json`.
+The same command verifies a signed daily root or hourly checkpoint: `curl -s https://api.prokura.network/v1/roots/2026-11-25 > root.json && prokura-verify root.json --server-key did:key:…`.
 
-**Pin the server key.** A Nachweis names its own signing key. Get the key from a signed daily root (`GET https://api.prokura.network/v1/roots/{date}`, field `server`) and pass it with `--server-key`; otherwise the verifier warns that the key is self-asserted.
+**Pin the server key.** A Nachweis names its own signing key, so verify against the key you got from us: `GET https://api.prokura.network/v1/public/keys` lists the current key (`evidence`) and every earlier one, and each signed daily root names it in `server`. Without `--server-key` the verifier warns that the key is self-asserted. After a key rotation, pass the ring comma-separated.
 
-**What's spec and what's observed.** The hash, chain, genesis and Ed25519-over-raw-hash rules come straight from llms.txt. Some details aren't written down on the site: the exact list of "remaining stored fields", the base64url signature encoding, `intentHash`, the agent's intent signature, the export proof and the root signature. For those, the verifiers follow the homepage's in-browser verifier and real demo files, and they are labelled **OBSERVED** in [`docs/nachweis-format.md`](docs/nachweis-format.md). Merkle inclusion proofs aren't verified because the leaf and tree format aren't specified. That doc lists the open questions.
+**Inclusion proofs.** A record's inclusion proof (`merkle-proof/v1` against the daily root, or `merkle-checkpoint-proof/v1` against the latest hourly checkpoint) verifies the same way: `prokura-verify proof.json --server-key did:key:… --record-hash <the record's hash>`.
+
+Every rule the verifiers apply is in [`docs/nachweis-format.md`](docs/nachweis-format.md).
 
 ## Tests
 
 ```bash
-cd verifier/typescript && npm test      # 14 tests
-cd verifier/python && pytest            # 13 tests
+cd verifier/typescript && npm test      # 20 tests
+cd verifier/python && pytest            # 20 tests
 ```
 
-Both suites run against three real demo exports (allow, step-up, deny), one real signed daily root, a synthetic chain from genesis (v1 and v2 records, throwaway key), shared RFC 8785 vectors, and tampering cases (amount, decision, re-hash without signing, removed record, wrong key, edited export, edited root).
+Both suites run against three real demo exports (allow, step-up, deny), one real signed daily root, and synthetic fixtures made with throwaway keys by `verifier/typescript/scripts/make-vectors.ts`: a chain from genesis (v1 and v2 records), Merkle roots and audit paths for trees of 0 to 9 leaves, signed inclusion proofs against a daily root and an hourly checkpoint, a key rotation, and shared RFC 8785 vectors. Tampering cases cover amount, decision, re-hashing without signing, a removed record, a wrong or unpinned key, an edited export or root, edited proofs and a moved rotation window.
 
 ## License, contributing, security
 
