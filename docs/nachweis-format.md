@@ -115,7 +115,14 @@ over the whole intent object as stored in the record, **including** `agentSignat
 
 ### 3.5 Server signature on a record
 
-`signature = sig` by the server key (§4) over the **32 raw bytes** of `hash` (not the hex string, not JCS).
+`signature = sig` by the server key (§4) over the **32 raw bytes** of `hash` (not the hex string, not JCS). The same acceptance rules apply to every Ed25519 signature in this format (`agentSignature`, the export `proof`, and the signatures on roots, checkpoints and proofs):
+
+- Decode A (the public key) and R (the first 32 bytes of the signature) as in RFC 8032 §5.1.3: reject the signature if the encoding is not 32 bytes or if the recovered y-coordinate is ≥ p (p = 2²⁵⁵ − 19).
+- Reject the signature if S (the last 32 bytes, read as a little-endian integer) is ≥ L, where L = 2²⁵² + 27742317777372353535851937790883648493 (RFC 8032 §5.1.7).
+- Reject the signature if A or R is one of the eight points of order 1, 2, 4 or 8 on edwards25519. Implementations of the RFC 8032 verification equation disagree on these inputs (see RFC 8032 §8); both verifiers in this repository reject them, so a signature that only verifies under a cofactored check against a small-order key or R is still rejected. The eight compressed encodings are listed in [`fixtures/ed25519-strict-vectors.json`](../fixtures/ed25519-strict-vectors.json).
+- Then apply the RFC 8032 verification equation.
+
+`fixtures/ed25519-strict-vectors.json` has a valid signature, a non-canonical S (S + L), the identity-key zero-signature case, and other small-order points. Both verifiers must agree on every vector.
 
 ### 3.6 Agent signature on an intent
 

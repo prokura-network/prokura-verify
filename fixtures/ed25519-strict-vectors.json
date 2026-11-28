@@ -1,0 +1,105 @@
+{
+  "note": "Acceptance tests for Ed25519 as specified in docs/nachweis-format.md §3.5. Both verifiers must agree on every vector. Public keys, signatures and messages are lowercase hex. The valid signature is from a throwaway key (private key not included). The eight small-order points are the kernel of [8] on edwards25519, in compressed form.",
+  "p": "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed",
+  "L": "1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed",
+  "smallOrderPoints": [
+    {
+      "id": "identity",
+      "order": 1,
+      "publicKey": "0100000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "id": "order-2",
+      "order": 2,
+      "publicKey": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+    },
+    {
+      "id": "order-4-y0-sign0",
+      "order": 4,
+      "publicKey": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "id": "order-4-y0-sign1",
+      "order": 4,
+      "publicKey": "0000000000000000000000000000000000000000000000000000000000000080"
+    },
+    {
+      "id": "order-8-a",
+      "order": 8,
+      "publicKey": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"
+    },
+    {
+      "id": "order-8-b",
+      "order": 8,
+      "publicKey": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85"
+    },
+    {
+      "id": "order-8-c",
+      "order": 8,
+      "publicKey": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"
+    },
+    {
+      "id": "order-8-d",
+      "order": 8,
+      "publicKey": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa"
+    }
+  ],
+  "vectors": [
+    {
+      "id": "valid",
+      "expect": "accept",
+      "reason": "Ordinary RFC 8032 signature over the UTF-8 text 'prokura-verify ed25519 strict vectors', from a throwaway key.",
+      "publicKey": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+      "signature": "aecf96bd9e575566928db0894c57d2e8bc74facacd375c03642b8c5e5baadd90e37a29e69292ad29b3bc50113f23f237e9e551307e82a578d97ef3e994ba1e08",
+      "message": "70726f6b7572612d76657269667920656432353531392073747269637420766563746f7273"
+    },
+    {
+      "id": "valid-S-plus-L",
+      "expect": "reject",
+      "reason": "Non-canonical S (S + L), same public key, R and message as the valid vector.",
+      "publicKey": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+      "signature": "aecf96bd9e575566928db0894c57d2e8bc74facacd375c03642b8c5e5baadd90d04e1f43adf5bf81895948b41d1dd14ce9e551307e82a578d97ef3e994ba1e18",
+      "message": "70726f6b7572612d76657269667920656432353531392073747269637420766563746f7273"
+    },
+    {
+      "id": "identity-key-zero-signature",
+      "expect": "reject",
+      "reason": "Small-order public key (identity) and small-order R, S = 0. Python cryptography accepts this for any message under a cofactored check; both verifiers must reject it.",
+      "publicKey": "0100000000000000000000000000000000000000000000000000000000000000",
+      "signature": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "message": "70726f6b7572612d76657269667920656432353531392073747269637420766563746f7273"
+    },
+    {
+      "id": "identity-key-zero-signature-record-hash",
+      "expect": "reject",
+      "reason": "Same identity-key zero signature, over a 32-byte message shaped like a record hash.",
+      "publicKey": "0100000000000000000000000000000000000000000000000000000000000000",
+      "signature": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "message": "3cbb6b2c1031230eb49f3f7169812d2cc9ffd9123ec140287739334bb4136e6b"
+    },
+    {
+      "id": "order-4-sign1-key-zero-signature-record-hash",
+      "expect": "reject",
+      "reason": "Small-order public key (order 4, y = 0, sign bit 1) and identity R, S = 0, over the record-hash message. Python cryptography accepts this (R, A, M) tuple.",
+      "publicKey": "0000000000000000000000000000000000000000000000000000000000000080",
+      "signature": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "message": "3cbb6b2c1031230eb49f3f7169812d2cc9ffd9123ec140287739334bb4136e6b"
+    },
+    {
+      "id": "order-2-key-and-R-zero-signature-empty",
+      "expect": "reject",
+      "reason": "Small-order public key and small-order R (both order 2), S = 0, empty message. Python cryptography accepts this tuple.",
+      "publicKey": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "signature": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000",
+      "message": ""
+    },
+    {
+      "id": "order-8-key-zero-signature",
+      "expect": "reject",
+      "reason": "Small-order public key (order 8) and identity R, S = 0, over SHA-256(0x09). Python cryptography accepts this tuple.",
+      "publicKey": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+      "signature": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "message": "2b4c342f5433ebe591a1da77e013d1b72475562d48578dca8b84bac6651c3cb9"
+    }
+  ]
+}
