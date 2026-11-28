@@ -1,3 +1,4 @@
+import base64
 import copy
 import json
 import pathlib
@@ -7,7 +8,7 @@ import pytest
 import re
 
 from prokura_verify import (
-    canonicalize, inclusion_proof, merkle_leaf, merkle_node, merkle_root, record_hash, record_leaf,
+    canonicalize, ed25519_ok, inclusion_proof, merkle_leaf, merkle_node, merkle_root, record_hash, record_leaf,
     verify_any, verify_inclusion, verify_nachweis, verify_proof, verify_root,
 )
 from prokura_verify.__main__ import main
@@ -186,3 +187,36 @@ def test_cli_proof_and_key_ring(tmp_path):
     ring = ",".join(k["id"] for k in d["serverKeys"])
     assert main([str(FIX / "synthetic-rotation.json"), "--server-key", ring]) == 0
     assert main([str(FIX / "synthetic-rotation.json"), "--server-key", d["server"]]) == 1
+
+
+def _b64url_pad(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode()
+
+
+def test_ed25519_strict_vectors():
+    corpus = fx("ed25519-strict-vectors.json")
+    assert len(corpus["smallOrderPoints"]) == 8
+    for v in corpus["vectors"]:
+        pub, sig, msg = bytes.fromhex(v["publicKey"]), bytes.fromhex(v["signature"]), bytes.fromhex(v["message"])
+        ok = ed25519_ok(pub, _b64url_pad(sig), msg)
+        assert ok is (v["expect"] == "accept"), v["id"]
+    identity = bytes.fromhex(next(p["publicKey"] for p in corpus["smallOrderPoints"] if p["id"] == "identity"))
+    msg = bytes.fromhex("3cbb6b2c1031230eb49f3f7169812d2cc9ffd9123ec140287739334bb4136e6b")
+    zero_s = bytes(32)
+    for point in corpus["smallOrderPoints"]:
+        pt = bytes.fromhex(point["publicKey"])
+        assert ed25519_ok(pt, _b64url_pad(identity + zero_s), msg) is False, point["id"] + " as A"
+        assert ed25519_ok(identity, _b64url_pad(pt + zero_s), msg) is False, point["id"] + " as R"
+
+
+def test_non_canonical_s_on_a_real_record():
+    d = fx("nachweis-demo-allow.json")
+    rec = d["records"][1]
+    raw = base64.urlsafe_b64decode(rec["signature"] + "=" * (-len(rec["signature"]) % 4))
+    s = int.from_bytes(raw[32:], "little")
+    L = (1 << 252) + 27742317777372353535851937790883648493
+    rec["signature"] = base64.urlsafe_b64encode(raw[:32] + (s + L).to_bytes(32, "little")).decode()
+    r = verify_nachweis(d, SERVER)
+    assert r["records"][1]["hash"] == "OK"
+    assert r["records"][1]["signature"] == "FAIL"
+    assert not r["ok"]

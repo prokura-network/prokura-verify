@@ -122,11 +122,51 @@ export function didKeyToEd25519(did: string): Uint8Array {
   return raw.slice(2);
 }
 
-function ed25519Ok(pub: Uint8Array, sigB64url: unknown, msg: Uint8Array): boolean {
+// RFC 8032: p = 2**255 - 19; L is the prime order of the base point.
+const ED25519_P = (1n << 255n) - 19n;
+const ED25519_L = (1n << 252n) + 27742317777372353535851937790883648493n;
+
+// The eight points of order 1, 2, 4 or 8 on edwards25519, compressed.
+// RFC 8032 §8: implementations disagree on signatures that use these as A or R.
+// Both verifiers reject them. Encodings also appear in fixtures/ed25519-strict-vectors.json.
+const ED25519_SMALL_ORDER = new Set([
+  "0100000000000000000000000000000000000000000000000000000000000000", // identity
+  "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // order 2
+  "0000000000000000000000000000000000000000000000000000000000000000", // order 4
+  "0000000000000000000000000000000000000000000000000000000000000080", // order 4
+  "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05", // order 8
+  "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85", // order 8
+  "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a", // order 8
+  "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa", // order 8
+]);
+
+function leInt(b: Uint8Array): bigint {
+  let n = 0n;
+  for (let i = b.length - 1; i >= 0; i--) n = (n << 8n) + BigInt(b[i]!);
+  return n;
+}
+
+function ed25519PointRejected(pt: Uint8Array): boolean {
+  if (pt.length !== 32) return true;
+  const y = leInt(pt) & ((1n << 255n) - 1n);
+  return y >= ED25519_P || ED25519_SMALL_ORDER.has(Buffer.from(pt).toString("hex"));
+}
+
+/** §3.5: Ed25519 verification as both verifiers implement it.
+ *  RFC 8032 §5.1.3 (reject a point with y >= p), §5.1.7 (reject S >= L), plus
+ *  rejection of the eight small-order points as A or R, then the RFC 8032
+ *  verification equation. */
+export function ed25519Ok(pub: Uint8Array, sigB64url: unknown, msg: Uint8Array): boolean {
   if (typeof sigB64url !== "string" || !sigB64url) return false;
+  if (pub.length !== 32) return false;
+  let sig: Buffer;
+  try { sig = Buffer.from(sigB64url.trim(), "base64url"); } catch { return false; }
+  if (sig.length !== 64) return false;
+  if (leInt(sig.subarray(32)) >= ED25519_L) return false;
+  if (ed25519PointRejected(pub) || ed25519PointRejected(sig.subarray(0, 32))) return false;
   try {
     const key = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: Buffer.from(pub).toString("base64url") }, format: "jwk" });
-    return edVerify(null, msg, key, Buffer.from(sigB64url.trim(), "base64url"));
+    return edVerify(null, msg, key, sig);
   } catch {
     return false;
   }

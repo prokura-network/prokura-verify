@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  canonicalize, recordHash, verifyNachweis, verifyRoot, verifyProof, verifyAny, merkleLeaf, merkleNode,
+  canonicalize, ed25519Ok, recordHash, verifyNachweis, verifyRoot, verifyProof, verifyAny, merkleLeaf, merkleNode,
   merkleRoot, inclusionProof, verifyInclusion, recordLeaf,
 } from "../src/index.js";
 
@@ -177,4 +177,47 @@ test("key rotation: each record is checked against the key valid at its createdA
   const t = fx("synthetic-rotation.json");
   t.serverKeys[0].validUntil = t.serverKeys[1].validFrom = "2026-02-01T08:00:00.000Z";
   assert.equal(verifyNachweis(t, { serverKey: ring }).ok, false);
+});
+
+const b64urlPad = (raw: Uint8Array) => {
+  const s = Buffer.from(raw).toString("base64url");
+  return s + "=".repeat((4 - (s.length % 4)) % 4);
+};
+
+test("Ed25519 strict vectors: both verifiers reject small-order A/R and S >= L", () => {
+  const corpus = fx("ed25519-strict-vectors.json");
+  assert.equal(corpus.smallOrderPoints.length, 8);
+  for (const v of corpus.vectors) {
+    const pub = Buffer.from(v.publicKey, "hex");
+    const sig = Buffer.from(v.signature, "hex");
+    const msg = Buffer.from(v.message, "hex");
+    const ok = ed25519Ok(pub, b64urlPad(sig), msg);
+    assert.equal(ok, v.expect === "accept", v.id);
+  }
+  const identity = Buffer.from(corpus.smallOrderPoints.find((p: { id: string }) => p.id === "identity").publicKey, "hex");
+  const msg = Buffer.from("3cbb6b2c1031230eb49f3f7169812d2cc9ffd9123ec140287739334bb4136e6b", "hex");
+  const zeroS = Buffer.alloc(32);
+  for (const point of corpus.smallOrderPoints) {
+    const pt = Buffer.from(point.publicKey, "hex");
+    assert.equal(ed25519Ok(pt, b64urlPad(Buffer.concat([identity, zeroS])), msg), false, point.id + " as A");
+    assert.equal(ed25519Ok(identity, b64urlPad(Buffer.concat([pt, zeroS])), msg), false, point.id + " as R");
+  }
+});
+
+test("non-canonical S on a real record fails the signature, not the hash", () => {
+  const L = (1n << 252n) + 27742317777372353535851937790883648493n;
+  const d = fx("nachweis-demo-allow.json");
+  const rec = d.records[1];
+  const raw = Buffer.from(rec.signature, "base64url");
+  let s = 0n;
+  for (let i = 63; i >= 32; i--) s = (s << 8n) + BigInt(raw[i]);
+  const sPlus = s + L;
+  const newS = Buffer.alloc(32);
+  let n = sPlus;
+  for (let i = 0; i < 32; i++) { newS[i] = Number(n & 0xffn); n >>= 8n; }
+  rec.signature = b64urlPad(Buffer.concat([raw.subarray(0, 32), newS]));
+  const r = verifyNachweis(d, { serverKey: SERVER });
+  assert.equal(r.records[1].hash, "OK");
+  assert.equal(r.records[1].signature, "FAIL");
+  assert.equal(r.ok, false);
 });

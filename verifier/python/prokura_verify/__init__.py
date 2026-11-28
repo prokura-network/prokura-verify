@@ -29,6 +29,7 @@ __all__ = [
     "verify_inclusion",
     "server_key_at",
     "did_key_to_ed25519",
+    "ed25519_ok",
     "verify_nachweis",
     "verify_root",
     "verify_proof",
@@ -264,17 +265,67 @@ def _b64url(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
-def _ed25519_ok(pub: bytes, sig_b64url: Optional[str], msg: bytes) -> bool:
+# RFC 8032: p = 2**255 - 19; L is the prime order of the base point.
+_ED25519_P = (1 << 255) - 19
+_ED25519_L = (1 << 252) + 27742317777372353535851937790883648493
+
+# The eight points of order 1, 2, 4 or 8 on edwards25519, compressed.
+# RFC 8032 §8: implementations disagree on signatures that use these as A or R.
+# Both verifiers reject them. Encodings also appear in fixtures/ed25519-strict-vectors.json.
+_ED25519_SMALL_ORDER = frozenset({
+    bytes.fromhex("0100000000000000000000000000000000000000000000000000000000000000"),  # identity
+    bytes.fromhex("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"),  # order 2
+    bytes.fromhex("0000000000000000000000000000000000000000000000000000000000000000"),  # order 4
+    bytes.fromhex("0000000000000000000000000000000000000000000000000000000000000080"),  # order 4
+    bytes.fromhex("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"),  # order 8
+    bytes.fromhex("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85"),  # order 8
+    bytes.fromhex("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"),  # order 8
+    bytes.fromhex("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa"),  # order 8
+})
+
+
+def _ed25519_point_rejected(pt: bytes) -> bool:
+    """True if the 32-byte encoding is unusable as A or R: wrong length, y >= p, or small-order."""
+    if len(pt) != 32:
+        return True
+    y = int.from_bytes(pt, "little") & ((1 << 255) - 1)
+    return y >= _ED25519_P or pt in _ED25519_SMALL_ORDER
+
+
+def ed25519_ok(pub: bytes, sig_b64url: Optional[str], msg: bytes) -> bool:
+    """§3.5: Ed25519 verification as both verifiers implement it.
+
+    RFC 8032 §5.1.3 (reject a point with y >= p), §5.1.7 (reject S >= L), plus
+    rejection of the eight small-order points as A or R, then the RFC 8032
+    verification equation. Python's `cryptography` library alone accepts some
+    torsion forgeries; this wrapper does not.
+    """
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
     if not isinstance(sig_b64url, str) or not sig_b64url:
         return False
+    if not isinstance(pub, (bytes, bytearray)) or len(pub) != 32:
+        return False
     try:
-        Ed25519PublicKey.from_public_bytes(pub).verify(_b64url(sig_b64url), msg)
+        sig = _b64url(sig_b64url)
+    except (ValueError, base64.binascii.Error):
+        return False
+    if len(sig) != 64:
+        return False
+    if int.from_bytes(sig[32:], "little") >= _ED25519_L:
+        return False
+    if _ed25519_point_rejected(bytes(pub)) or _ed25519_point_rejected(sig[:32]):
+        return False
+    try:
+        Ed25519PublicKey.from_public_bytes(bytes(pub)).verify(sig, msg)
         return True
     except (InvalidSignature, ValueError):
         return False
+
+
+# Kept as an alias so older local patches that import _ed25519_ok still work.
+_ed25519_ok = ed25519_ok
 
 
 # ---------------------------------------------------------------------------
